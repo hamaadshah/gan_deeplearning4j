@@ -28,12 +28,12 @@ import java.util.List;
 
 public class dl4jGAN {
     private static final Logger log = LoggerFactory.getLogger(dl4jGAN.class);
-    private int batchSizePerWorker = 50;
-    private int numEpochs = 5;
-    private int numLinesToSkip = 0;
-    private String delimiter = ",";
-    private int labelIndex = 784;
-    private int numClasses = 10;
+    private static final int batchSizePerWorker = 50;
+    private static final int numEpochs = 1;
+    private static final int numLinesToSkip = 0;
+    private static final String delimiter = ",";
+    private static final int labelIndex = 784;
+    private static final int numClasses = 10;
 
     public static void main(String[] args) throws Exception {
         new dl4jGAN().entryPoint(args);
@@ -79,11 +79,12 @@ public class dl4jGAN {
 
         for (int i = 0; i < numEpochs; i++) {
             sparkNet.fit(trainData);
-            log.info("Completed Epoch {}", i);
+            log.info("Completed Epoch: {}.", i);
         }
 
         Evaluation evaluation = sparkNet.doEvaluation(testData, 64, new Evaluation(10))[0];
         log.info(evaluation.stats());
+
         tm.deleteTempFiles(sc);
     }
 }
