@@ -1,11 +1,19 @@
 package org.deeplearning4j;
 
+import java.util.*;
+
 import org.apache.spark.SparkConf;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
 
+import org.datavec.api.records.reader.RecordReader;
+import org.datavec.api.records.reader.impl.csv.CSVRecordReader;
+import org.datavec.api.split.FileSplit;
+import org.datavec.api.util.ClassPathResource;
+
 import org.deeplearning4j.datasets.datavec.RecordReaderDataSetIterator;
 import org.deeplearning4j.eval.Evaluation;
+import org.deeplearning4j.nn.conf.inputs.InputType;
 import org.deeplearning4j.nn.conf.layers.*;
 import org.deeplearning4j.nn.conf.NeuralNetConfiguration;
 import org.deeplearning4j.nn.graph.ComputationGraph;
@@ -22,13 +30,6 @@ import org.nd4j.linalg.lossfunctions.*;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import org.datavec.api.records.reader.RecordReader;
-import org.datavec.api.records.reader.impl.csv.CSVRecordReader;
-import org.datavec.api.split.FileSplit;
-import org.datavec.api.util.ClassPathResource;
-
-import java.util.*;
 
 public class dl4jGAN {
     private static final Logger log = LoggerFactory.getLogger(dl4jGAN.class);
@@ -80,12 +81,14 @@ public class dl4jGAN {
                                                                               .seed(666)
                                                                               .activation(Activation.RELU)
                                                                               .weightInit(WeightInit.XAVIER)
-                                                                              .l2(learning_rate * 0.005) // regularize learning model
+                                                                              .l2(learning_rate * 0.005)
                                                                               .graphBuilder()
                                                                               .addInputs("dis_input_layer_0")
-                                                                              .addLayer("dis_dense_layer_1", new DenseLayer.Builder().updater(new Sgd(frozen_learning_rate)).nIn(28 * 28).nOut(2000).build(), "dis_input_layer_0")
-                                                                              .addLayer("dis_dense_layer_2", new DenseLayer.Builder().updater(new Sgd(frozen_learning_rate)).nIn(2000).nOut(2000).build(), "dis_dense_layer_1")
-                                                                              .addLayer("dis_output_layer_3", new OutputLayer.Builder(LossFunctions.LossFunction.MCXENT).updater(new Sgd(learning_rate)).nIn(2000).nOut(numClasses).activation(Activation.SOFTMAX).build(), "dis_dense_layer_2")
+                                                                              .setInputTypes(InputType.convolutionalFlat(28, 28, 1))
+                                                                              .addLayer("dis_conv2d_layer", new ConvolutionLayer.Builder(5, 5).stride(1, 1).updater(new Sgd(learning_rate)).nIn(1).nOut(1).build(),"dis_input_layer_0")
+                                                                              .addLayer("dis_dense_layer_1", new DenseLayer.Builder().updater(new Sgd(learning_rate)).nOut(2000).build(), "dis_conv2d_layer")
+                                                                              .addLayer("dis_dense_layer_2", new DenseLayer.Builder().updater(new Sgd(frozen_learning_rate)).nOut(2000).build(), "dis_dense_layer_1")
+                                                                              .addLayer("dis_output_layer_3", new OutputLayer.Builder(LossFunctions.LossFunction.MCXENT).updater(new Sgd(learning_rate)).nOut(numClasses).activation(Activation.SOFTMAX).build(), "dis_dense_layer_2")
                                                                               .setOutputs("dis_output_layer_3")
                                                                               .build());
         dis.init();
@@ -94,12 +97,14 @@ public class dl4jGAN {
                                                                               .seed(666)
                                                                               .activation(Activation.RELU)
                                                                               .weightInit(WeightInit.XAVIER)
-                                                                              .l2(learning_rate * 0.005) // regularize learning model
+                                                                              .l2(learning_rate * 0.005)
                                                                               .graphBuilder()
                                                                               .addInputs("gen_input_layer_0")
-                                                                              .addLayer("gen_dense_layer_1", new DenseLayer.Builder().updater(new Sgd(learning_rate)).nIn(28 * 28).nOut(2000).build(), "gen_input_layer_0")
-                                                                              .addLayer("gen_dense_layer_2", new DenseLayer.Builder().updater(new Sgd(learning_rate)).nIn(2000).nOut(2000).build(), "gen_dense_layer_1")
-                                                                              .addLayer("gen_output_layer_3", new OutputLayer.Builder(LossFunctions.LossFunction.MCXENT).updater(new Sgd(learning_rate)).nIn(2000).nOut(numClasses).activation(Activation.SOFTMAX).build(), "gen_dense_layer_2")
+                                                                              .setInputTypes(InputType.convolutionalFlat(28, 28, 1))
+                                                                              .addLayer("gen_conv2d_layer", new ConvolutionLayer.Builder(5, 5).stride(1, 1).updater(new Sgd(learning_rate)).nIn(1).nOut(1).build(),"gen_input_layer_0")
+                                                                              .addLayer("gen_dense_layer_1", new DenseLayer.Builder().updater(new Sgd(learning_rate)).nOut(2000).build(), "gen_conv2d_layer")
+                                                                              .addLayer("gen_dense_layer_2", new DenseLayer.Builder().updater(new Sgd(frozen_learning_rate)).nOut(2000).build(), "gen_dense_layer_1")
+                                                                              .addLayer("gen_output_layer_3", new OutputLayer.Builder(LossFunctions.LossFunction.MCXENT).updater(new Sgd(learning_rate)).nOut(numClasses).activation(Activation.SOFTMAX).build(), "gen_dense_layer_2")
                                                                               .setOutputs("gen_output_layer_3")
                                                                               .build());
         gen.init();
@@ -123,6 +128,8 @@ public class dl4jGAN {
         Evaluation evaluation = sparkNet.doEvaluation(testData, batchSizePerWorker, new Evaluation(numClasses))[0];
         log.info(evaluation.stats());
 
+        gen.getLayer("gen_conv2d_layer").setParam("b", dis.getLayer("dis_conv2d_layer").getParam("b"));
+        gen.getLayer("gen_conv2d_layer").setParam("W", dis.getLayer("dis_conv2d_layer").getParam("W"));
         gen.getLayer("gen_dense_layer_1").setParam("b", dis.getLayer("dis_dense_layer_1").getParam("b"));
         gen.getLayer("gen_dense_layer_1").setParam("W", dis.getLayer("dis_dense_layer_1").getParam("W"));
         gen.getLayer("gen_dense_layer_2").setParam("b", dis.getLayer("dis_dense_layer_2").getParam("b"));
