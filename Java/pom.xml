@@ -2,14 +2,13 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+         
     <modelVersion>4.0.0</modelVersion>
-
     <groupId>org.deeplearning4j</groupId>
     <artifactId>dl4jGAN</artifactId>
     <version>1.0.0-beta</version>
-
     <properties>
-        <!-- Change the nd4j.backend property to nd4j-cuda-9.0-platform to use CUDA GPUs -->
+        <!--nd4j-cuda-9.0-platform-->
         <nd4j.backend>nd4j-native-platform</nd4j.backend>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <shadedClassifier>bin</shadedClassifier>
@@ -151,7 +150,6 @@
     </dependencies>
     <build>
         <plugins>
-            <!-- Maven compiler plugin: compile for Java 8 -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
