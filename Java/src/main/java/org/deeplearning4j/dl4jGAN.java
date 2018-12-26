@@ -1,5 +1,6 @@
 package org.deeplearning4j;
 
+import java.io.*;
 import java.util.*;
 
 import org.apache.spark.SparkConf;
@@ -7,9 +8,12 @@ import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
 
 import org.datavec.api.records.reader.RecordReader;
+import org.datavec.api.records.writer.RecordWriter;
 import org.datavec.api.records.reader.impl.csv.CSVRecordReader;
+import org.datavec.api.records.writer.impl.csv.CSVRecordWriter;
 import org.datavec.api.split.FileSplit;
 import org.datavec.api.util.ClassPathResource;
+
 
 import org.deeplearning4j.datasets.datavec.RecordReaderDataSetIterator;
 import org.deeplearning4j.eval.Evaluation;
@@ -23,8 +27,10 @@ import org.deeplearning4j.spark.impl.graph.SparkComputationGraph;
 import org.deeplearning4j.spark.impl.paramavg.ParameterAveragingTrainingMaster;
 
 import org.nd4j.linalg.activations.*;
+import org.nd4j.linalg.api.ndarray.INDArray;
 import org.nd4j.linalg.dataset.DataSet;
 import org.nd4j.linalg.dataset.api.iterator.DataSetIterator;
+import org.nd4j.linalg.factory.Nd4j;
 import org.nd4j.linalg.learning.config.*;
 import org.nd4j.linalg.lossfunctions.*;
 
@@ -54,6 +60,11 @@ public class dl4jGAN {
             System.out.println(args[i]);
         }
 
+        INDArray arrWrite = Nd4j.linspace(1,10,10);
+        Nd4j.writeNumpy(arrWrite,"tmp.csv", ", ");
+        arrWrite = Nd4j.linspace(11,20,10);
+        Nd4j.writeNumpy(arrWrite,"tmp.csv", ", ");
+
         SparkConf sparkConf = new SparkConf();
         sparkConf.setMaster("local[*]");
         sparkConf.setAppName("DL4J Spark Generative Adversarial Network (GAN)");
@@ -70,7 +81,7 @@ public class dl4jGAN {
 
         RecordReader recordReaderTest = new CSVRecordReader(numLinesToSkip, delimiter);
         recordReaderTest.initialize(new FileSplit(new ClassPathResource("mnist_test.txt").getFile()));
-        DataSetIterator iterTest = new RecordReaderDataSetIterator(recordReaderTest, batchSizePerWorker, labelIndex, numClasses);
+        DataSetIterator iterTest = new RecordReaderDataSetIterator(recordReaderTest, 1, labelIndex, numClasses);
         List<DataSet> testDataList = new ArrayList<>();
         while (iterTest.hasNext()) {
             testDataList.add(iterTest.next());
@@ -115,7 +126,6 @@ public class dl4jGAN {
         gen.init();
         System.out.println(gen.summary());
 
-
         TrainingMaster tm = new ParameterAveragingTrainingMaster.Builder(batchSizePerWorker)
                                                                 .averagingFrequency(5)
                                                                 .workerPrefetchNumBatches(2)
@@ -154,6 +164,51 @@ public class dl4jGAN {
 
         Evaluation evaluation_gen = sparkNetGen.doEvaluation(testData, batchSizePerWorker, new Evaluation(numClasses))[0];
         log.info(evaluation_gen.stats());
+
+        INDArray testDataPred = Nd4j.zeros(10000,1);
+        for (int i = 0; i < 10000; i++) {
+//            testDataPred.putScalar(i, 0, (INDArray) sparkNet.getNetwork().output(iterTest.next().getFeatureMatrix()).getDouble(0, 0));
+            System.out.println(sparkNet.getNetwork().output(iterTest.next().getFeatureMatrix()));
+        }
+//        Nd4j.writeNumpy(Nd4j.vstack((INDArray) testDataPred),"pred.csv", ", ");
+
+        /*
+        List<INDArray[]> testDataPred = new ArrayList<>();
+        while (iterTest.hasNext()) {
+            testDataPred.add(sparkNet.getNetwork().output(iterTest.next().getFeatureMatrix()));
+        }
+
+        Nd4j.writeNumpy(Nd4j.vstack((INDArray) testDataPred),"pred.csv", ", ");
+        CSVRecordWriter recordWriter = new CSVRecordWriter();
+        File tempFile = File.createTempFile("datavec", "writer");
+        tempFile.deleteOnExit();
+
+        CSVRecordWriter writer = new CSVRecordWriter().new FileWriter("check.csv"));
+
+        List<INDArray[]> collection = new ArrayList<>();
+        collection.add(sparkNet.getNetwork().output(iterTest.next().getFeatureMatrix()));
+        writer.write(collection);
+        testData.coalesce(1)
+
+        recordWriter.initialize();
+
+        CSVRecordWriter recordW = new CSVRecordWriter(numLinesToSkip, delimiter);
+        recordReaderTrain.initialize(new FileSplit(new ClassPathResource("mnist_train.txt").getFile()));
+
+        OutputStream fos = new FileOutputStream() (new ClassPathResource("mnist_train.txt"));
+        DataOutputStream dos = new DataOutputStream(fos);
+        Nd4j.write(model.params(), dos);
+        dos.flush();
+        dos.close();
+
+        Nd4j.write(, sparkNet.getNetwork().output(iterTest.next().getFeatureMatrix()));
+
+
+        try (DataOutputStream sWrite = new DataOutputStream(new FileOutputStream(new File("tmp.bin")))) {
+            Nd4j.write(arrWrite, sWrite);
+        }
+        */
+
 
         tm.deleteTempFiles(sc);
     }
