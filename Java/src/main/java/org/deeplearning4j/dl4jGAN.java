@@ -5,15 +5,20 @@ import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
 
 import org.deeplearning4j.eval.Evaluation;
+import org.deeplearning4j.nn.conf.NeuralNetConfiguration;
 import org.deeplearning4j.spark.api.TrainingMaster;
 import org.deeplearning4j.spark.impl.graph.SparkComputationGraph;
 import org.deeplearning4j.spark.impl.paramavg.ParameterAveragingTrainingMaster;
 import org.deeplearning4j.datasets.datavec.RecordReaderDataSetIterator;
 import org.deeplearning4j.nn.graph.ComputationGraph;
-import org.deeplearning4j.nn.modelimport.keras.KerasModelImport;
+import org.deeplearning4j.nn.conf.layers.*;
+import org.deeplearning4j.nn.weights.*;
 
 import org.nd4j.linalg.dataset.DataSet;
 import org.nd4j.linalg.dataset.api.iterator.DataSetIterator;
+import org.nd4j.linalg.activations.*;
+import org.nd4j.linalg.learning.config.*;
+import org.nd4j.linalg.lossfunctions.*;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,8 +28,7 @@ import org.datavec.api.records.reader.impl.csv.CSVRecordReader;
 import org.datavec.api.split.FileSplit;
 import org.datavec.api.util.ClassPathResource;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
 
 public class dl4jGAN {
     private static final Logger log = LoggerFactory.getLogger(dl4jGAN.class);
@@ -34,15 +38,19 @@ public class dl4jGAN {
     private static final String delimiter = ",";
     private static final int labelIndex = 784;
     private static final int numClasses = 10;
+    private static final double learning_rate = 0.0015;
+    private static final double frozen_learning_rate = 0.0;
 
     public static void main(String[] args) throws Exception {
         new dl4jGAN().entryPoint(args);
     }
 
     protected void entryPoint(String[] args) throws Exception {
+        System.out.println(args);
+
         SparkConf sparkConf = new SparkConf();
         sparkConf.setMaster("local[*]");
-        sparkConf.setAppName("DL4J Spark MLP Example");
+        sparkConf.setAppName("DL4J Spark Generative Adversarial Network (GAN)");
         JavaSparkContext sc = new JavaSparkContext(sparkConf);
 
         RecordReader recordReaderTrain = new CSVRecordReader(numLinesToSkip, delimiter);
@@ -67,7 +75,36 @@ public class dl4jGAN {
         JavaRDD<DataSet> trainData = sc.parallelize(trainDataList);
         JavaRDD<DataSet> testData = sc.parallelize(testDataList);
 
-        ComputationGraph model = KerasModelImport.importKerasModelAndWeights(new ClassPathResource("mlp_fnctl.h5").getFile().getPath(),true);
+        ComputationGraph dis = new ComputationGraph(new NeuralNetConfiguration.Builder()
+                .seed(666)
+                .activation(Activation.RELU)
+                .weightInit(WeightInit.XAVIER)
+                .l2(learning_rate * 0.005) // regularize learning model
+                .graphBuilder()
+                .addInputs("dis_input_layer_0")
+                .addLayer("dis_dense_layer_1", new DenseLayer.Builder().updater(new Sgd(learning_rate)).nIn(28 * 28).nOut(2000).build(), "dis_input_layer_0")
+                .addLayer("dis_dense_layer_2", new DenseLayer.Builder().updater(new Sgd(frozen_learning_rate)).nIn(2000).nOut(2000).build(), "dis_dense_layer_1")
+                .addLayer("dis_output_layer_3", new OutputLayer.Builder(LossFunctions.LossFunction.MCXENT).updater(new Sgd(learning_rate)).nIn(2000).nOut(numClasses).activation(Activation.SOFTMAX).build(), "dis_dense_layer_2")
+                .setOutputs("dis_output_layer_3")
+                .build());
+        dis.init();
+
+        ComputationGraph gen = new ComputationGraph(new NeuralNetConfiguration.Builder()
+                .seed(666)
+                .activation(Activation.RELU)
+                .weightInit(WeightInit.XAVIER)
+                .l2(learning_rate * 0.005) // regularize learning model
+                .graphBuilder()
+                .addInputs("gen_input_layer_0")
+                .addLayer("gen_dense_layer_1", new DenseLayer.Builder().updater(new Sgd(learning_rate)).nIn(28 * 28).nOut(2000).build(), "gen_input_layer_0")
+                .addLayer("gen_dense_layer_2", new DenseLayer.Builder().updater(new Sgd(learning_rate)).nIn(2000).nOut(2000).build(), "gen_dense_layer_1")
+                .addLayer("gen_output_layer_3", new OutputLayer.Builder(LossFunctions.LossFunction.MCXENT).updater(new Sgd(learning_rate)).nIn(2000).nOut(numClasses).activation(Activation.SOFTMAX).build(), "gen_dense_layer_2")
+                .setOutputs("gen_output_layer_3")
+                .build());
+        gen.init();
+
+        System.out.println(dis.summary());
+        System.out.println(gen.summary());
 
         TrainingMaster tm = new ParameterAveragingTrainingMaster.Builder(batchSizePerWorker)
                                                                 .averagingFrequency(5)
@@ -75,15 +112,27 @@ public class dl4jGAN {
                                                                 .batchSizePerWorker(batchSizePerWorker)
                                                                 .build();
 
-        SparkComputationGraph sparkNet = new SparkComputationGraph(sc, model.getConfiguration(), tm);
+        SparkComputationGraph sparkNet = new SparkComputationGraph(sc, dis, tm);
 
         for (int i = 0; i < numEpochs; i++) {
             sparkNet.fit(trainData);
             log.info("Completed Epoch: {}.", i);
         }
 
-        Evaluation evaluation = sparkNet.doEvaluation(testData, 64, new Evaluation(10))[0];
+        Evaluation evaluation = sparkNet.doEvaluation(testData, batchSizePerWorker, new Evaluation(numClasses))[0];
         log.info(evaluation.stats());
+
+        gen.getLayer("gen_dense_layer_1").setParam("b", dis.getLayer("dis_dense_layer_1").getParam("b"));
+        gen.getLayer("gen_dense_layer_1").setParam("W", dis.getLayer("dis_dense_layer_1").getParam("W"));
+        gen.getLayer("gen_dense_layer_2").setParam("b", dis.getLayer("dis_dense_layer_2").getParam("b"));
+        gen.getLayer("gen_dense_layer_2").setParam("W", dis.getLayer("dis_dense_layer_2").getParam("W"));
+        gen.getLayer("gen_output_layer_3").setParam("b", dis.getLayer("dis_output_layer_3").getParam("b"));
+        gen.getLayer("gen_output_layer_3").setParam("W", dis.getLayer("dis_output_layer_3").getParam("W"));
+
+        SparkComputationGraph sparkNetGen = new SparkComputationGraph(sc, gen, tm);
+
+        Evaluation evaluation_gen = sparkNetGen.doEvaluation(testData, batchSizePerWorker, new Evaluation(numClasses))[0];
+        log.info(evaluation_gen.stats());
 
         tm.deleteTempFiles(sc);
     }
