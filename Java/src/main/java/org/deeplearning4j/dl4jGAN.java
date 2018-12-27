@@ -1,6 +1,5 @@
 package org.deeplearning4j;
 
-import java.io.*;
 import java.util.*;
 
 import org.apache.spark.SparkConf;
@@ -8,9 +7,7 @@ import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
 
 import org.datavec.api.records.reader.RecordReader;
-import org.datavec.api.records.writer.RecordWriter;
 import org.datavec.api.records.reader.impl.csv.CSVRecordReader;
-import org.datavec.api.records.writer.impl.csv.CSVRecordWriter;
 import org.datavec.api.split.FileSplit;
 import org.datavec.api.util.ClassPathResource;
 
@@ -40,7 +37,7 @@ import org.slf4j.LoggerFactory;
 public class dl4jGAN {
     private static final Logger log = LoggerFactory.getLogger(dl4jGAN.class);
 
-    private static final int batchSizePerWorker = 50;
+    private static final int batchSizePerWorker = 100;
     private static final int numEpochs = 1;
     private static final int numLinesToSkip = 0;
     private static final int labelIndex = 784;
@@ -51,6 +48,8 @@ public class dl4jGAN {
 
     private static final String delimiter = ",";
 
+    private INDArray[] x;
+
     public static void main(String[] args) throws Exception {
         new dl4jGAN().GAN(args);
     }
@@ -60,10 +59,12 @@ public class dl4jGAN {
             System.out.println(args[i]);
         }
 
+        /*
         INDArray arrWrite = Nd4j.linspace(1,10,10);
         Nd4j.writeNumpy(arrWrite,"tmp.csv", ", ");
         arrWrite = Nd4j.linspace(11,20,10);
         Nd4j.writeNumpy(arrWrite,"tmp.csv", ", ");
+        */
 
         SparkConf sparkConf = new SparkConf();
         sparkConf.setMaster("local[*]");
@@ -90,7 +91,7 @@ public class dl4jGAN {
 
         ComputationGraph dis = new ComputationGraph(new NeuralNetConfiguration.Builder()
                                                                               .seed(666)
-                                                                              .activation(Activation.RELU)
+                                                                              .activation(Activation.ELU)
                                                                               .weightInit(WeightInit.XAVIER)
                                                                               .l2(learning_rate * 0.005)
                                                                               .graphBuilder()
@@ -109,7 +110,7 @@ public class dl4jGAN {
 
         ComputationGraph gen = new ComputationGraph(new NeuralNetConfiguration.Builder()
                                                                               .seed(666)
-                                                                              .activation(Activation.RELU)
+                                                                              .activation(Activation.ELU)
                                                                               .weightInit(WeightInit.XAVIER)
                                                                               .l2(learning_rate * 0.005)
                                                                               .graphBuilder()
@@ -141,7 +142,7 @@ public class dl4jGAN {
 
         Evaluation evaluation = sparkNet.doEvaluation(testData, batchSizePerWorker, new Evaluation(numClasses))[0];
         log.info(evaluation.stats());
-
+/*
         gen.getLayer("gen_batch_1").setParam("gamma", dis.getLayer("dis_batch_1").getParam("gamma"));
         gen.getLayer("gen_batch_1").setParam("beta", dis.getLayer("dis_batch_1").getParam("beta"));
         gen.getLayer("gen_batch_1").setParam("mean", dis.getLayer("dis_batch_1").getParam("mean"));
@@ -164,11 +165,21 @@ public class dl4jGAN {
 
         Evaluation evaluation_gen = sparkNetGen.doEvaluation(testData, batchSizePerWorker, new Evaluation(numClasses))[0];
         log.info(evaluation_gen.stats());
+*/
 
-        INDArray testDataPred = Nd4j.zeros(10000,1);
-        for (int i = 0; i < 10000; i++) {
+        INDArray testDataPred = Nd4j.zeros(10000,10);
+        iterTest.reset();
+        while (iterTest.hasNext()) {
 //            testDataPred.putScalar(i, 0, (INDArray) sparkNet.getNetwork().output(iterTest.next().getFeatureMatrix()).getDouble(0, 0));
-            System.out.println(sparkNet.getNetwork().output(iterTest.next().getFeatureMatrix()));
+//            System.out.println(Arrays.toString(sparkNet.getNetwork().output(iterTest.next().getFeatureMatrix())));
+            x = sparkNet.getNetwork().output(iterTest.next().getFeatureMatrix());
+            break;
+        }
+
+        for (int i = 0; i < x.length; i++) {
+            testDataPred.putRow(i, x[i]);
+            Nd4j.writeNumpy(testDataPred,"tmp.csv",",");
+            System.out.println(x[i]);
         }
 //        Nd4j.writeNumpy(Nd4j.vstack((INDArray) testDataPred),"pred.csv", ", ");
 

@@ -5,4 +5,5 @@ Java/target/*
 Java/src/main/resources/*
 Python/data/*
 Python/outputs/*
+*.csv
 
