@@ -38,6 +38,7 @@ public class dl4jGAN {
     private static final Logger log = LoggerFactory.getLogger(dl4jGAN.class);
 
     private static final int batchSizePerWorker = 100;
+    private static final int batchSizePred = 1;
     private static final int numEpochs = 1;
     private static final int numLinesToSkip = 0;
     private static final int labelIndex = 784;
@@ -48,7 +49,7 @@ public class dl4jGAN {
 
     private static final String delimiter = ",";
 
-    private INDArray[] x;
+    private INDArray testDataPred = Nd4j.zeros(10000, numClasses);
 
     public static void main(String[] args) throws Exception {
         new dl4jGAN().GAN(args);
@@ -78,15 +79,17 @@ public class dl4jGAN {
         while (iterTrain.hasNext()) {
             trainDataList.add(iterTrain.next());
         }
+        iterTrain.reset();
         JavaRDD<DataSet> trainData = sc.parallelize(trainDataList);
 
         RecordReader recordReaderTest = new CSVRecordReader(numLinesToSkip, delimiter);
         recordReaderTest.initialize(new FileSplit(new ClassPathResource("mnist_test.txt").getFile()));
-        DataSetIterator iterTest = new RecordReaderDataSetIterator(recordReaderTest, 1, labelIndex, numClasses);
+        DataSetIterator iterTest = new RecordReaderDataSetIterator(recordReaderTest, batchSizePred, labelIndex, numClasses);
         List<DataSet> testDataList = new ArrayList<>();
         while (iterTest.hasNext()) {
             testDataList.add(iterTest.next());
         }
+        iterTest.reset();
         JavaRDD<DataSet> testData = sc.parallelize(testDataList);
 
         ComputationGraph dis = new ComputationGraph(new NeuralNetConfiguration.Builder()
@@ -167,20 +170,11 @@ public class dl4jGAN {
         log.info(evaluation_gen.stats());
 */
 
-        INDArray testDataPred = Nd4j.zeros(10000,10);
-        iterTest.reset();
-        while (iterTest.hasNext()) {
-//            testDataPred.putScalar(i, 0, (INDArray) sparkNet.getNetwork().output(iterTest.next().getFeatureMatrix()).getDouble(0, 0));
-//            System.out.println(Arrays.toString(sparkNet.getNetwork().output(iterTest.next().getFeatureMatrix())));
-            x = sparkNet.getNetwork().output(iterTest.next().getFeatureMatrix());
-            break;
+        for (int i = 0; i < testDataPred.length(); i++) {
+            testDataPred.putRow(i, sparkNet.getNetwork().output(iterTest.next().getFeatureMatrix())[0]);
         }
+        Nd4j.writeNumpy(testDataPred,"tmp.csv",",");
 
-        for (int i = 0; i < x.length; i++) {
-            testDataPred.putRow(i, x[i]);
-            Nd4j.writeNumpy(testDataPred,"tmp.csv",",");
-            System.out.println(x[i]);
-        }
 //        Nd4j.writeNumpy(Nd4j.vstack((INDArray) testDataPred),"pred.csv", ", ");
 
         /*
