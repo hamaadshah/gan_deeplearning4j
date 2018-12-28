@@ -58,6 +58,88 @@ public class dl4jGAN {
             System.out.println(args[i]);
         }
 
+        ComputationGraph dis = new ComputationGraph(new NeuralNetConfiguration.Builder()
+                .seed(666)
+                .activation(Activation.TANH)
+                .weightInit(WeightInit.XAVIER)
+                .l2(learning_rate * 0.005)
+                .graphBuilder()
+                .addInputs("dis_input_layer_0")
+                .setInputTypes(InputType.convolutionalFlat(28, 28, 1))
+                .addLayer("dis_batch_layer_1", new BatchNormalization.Builder()
+                        .build(),"dis_input_layer_0")
+                .addLayer("dis_conv2d_layer_2", new ConvolutionLayer.Builder(5, 5)
+                        .stride(2, 2)
+                        .updater(new Sgd(learning_rate))
+                        .nIn(1)
+                        .nOut(64)
+                        .build(),"dis_batch_layer_1")
+                .addLayer("dis_maxpool_layer_3", new SubsamplingLayer.Builder(PoolingType.MAX)
+                        .kernelSize(2, 2)
+                        .stride(1, 1)
+                        .build(),"dis_conv2d_layer_2")
+                .addLayer("dis_conv2d_layer_4", new ConvolutionLayer.Builder(5, 5)
+                        .stride(2, 2)
+                        .updater(new Sgd(learning_rate))
+                        .nIn(64)
+                        .nOut(128)
+                        .build(),"dis_maxpool_layer_3")
+                .addLayer("dis_maxpool_layer_5", new SubsamplingLayer.Builder(PoolingType.MAX)
+                        .kernelSize(2, 2)
+                        .stride(1, 1)
+                        .build(),"dis_conv2d_layer_4")
+                .addLayer("dis_dense_layer_6", new DenseLayer.Builder()
+                        .updater(new Sgd(learning_rate))
+                        .nOut(1024)
+                        .build(),"dis_maxpool_layer_5")
+                .addLayer("dis_output_layer_7", new OutputLayer.Builder(LossFunctions.LossFunction.MCXENT)
+                        .updater(new Sgd(learning_rate))
+                        .nOut(numClasses)
+                        .activation(Activation.SOFTMAX)
+                        .build(),"dis_dense_layer_6")
+                .setOutputs("dis_output_layer_7")
+                .build());
+        dis.init();
+        System.out.println(dis.summary());
+
+        ComputationGraph gen = new ComputationGraph(new NeuralNetConfiguration.Builder()
+                .seed(666)
+                .activation(Activation.ELU)
+                .weightInit(WeightInit.XAVIER)
+                .l2(learning_rate * 0.005)
+                .graphBuilder()
+                .addInputs("gen_input_layer_0")
+                .setInputTypes(InputType.convolutionalFlat(28, 28, 1))
+                .addLayer("gen_batch_1", new BatchNormalization.Builder()
+                        .build(),"gen_input_layer_0")
+                .addLayer("gen_conv2d_layer", new ConvolutionLayer.Builder(5, 5)
+                        .stride(1, 1)
+                        .updater(new Sgd(learning_rate))
+                        .nIn(1)
+                        .nOut(1)
+                        .build(),"gen_batch_1")
+                .addLayer("gen_maxpool_layer", new SubsamplingLayer.Builder(PoolingType.MAX)
+                        .kernelSize(2, 2)
+                        .stride(2, 2)
+                        .build(),"gen_conv2d_layer")
+                .addLayer("gen_dense_layer_1", new DenseLayer.Builder()
+                        .updater(new Sgd(learning_rate))
+                        .nOut(2000)
+                        .build(),"gen_maxpool_layer")
+                .addLayer("gen_dense_layer_2", new DenseLayer.Builder()
+                        .updater(new Sgd(frozen_learning_rate))
+                        .nOut(2000)
+                        .build(),"gen_dense_layer_1")
+                .addLayer("gen_output_layer_3", new OutputLayer.Builder(LossFunctions.LossFunction.MCXENT)
+                        .updater(new Sgd(learning_rate))
+                        .nOut(numClasses)
+                        .activation(Activation.SOFTMAX)
+                        .build(),"gen_dense_layer_2")
+                .setOutputs("gen_output_layer_3")
+                .build());
+        gen.init();
+        System.out.println(gen.summary());
+
         SparkConf sparkConf = new SparkConf();
         sparkConf.setMaster("local[*]");
         sparkConf.setAppName("DL4J Apache Spark: Generative Adversarial Network");
@@ -87,69 +169,6 @@ public class dl4jGAN {
         iterTest.reset();
         JavaRDD<DataSet> testData = sc.parallelize(testDataList);
 
-        ComputationGraph dis = new ComputationGraph(new NeuralNetConfiguration.Builder()
-                .seed(666)
-                .activation(Activation.ELU)
-                .weightInit(WeightInit.XAVIER)
-                .l2(learning_rate * 0.005)
-                .graphBuilder()
-                .addInputs("dis_input_layer_0")
-                .setInputTypes(InputType.convolutionalFlat(28, 28, 1))
-                .addLayer("dis_batch_1", new BatchNormalization.Builder()
-                        .build(), "dis_input_layer_0")
-                .addLayer("dis_conv2d_layer", new ConvolutionLayer.Builder(5, 5)
-                        .stride(1, 1)
-                        .updater(new Sgd(learning_rate))
-                        .nIn(1)
-                        .nOut(1)
-                        .build(), "dis_batch_1")
-                .addLayer("dis_maxpool_layer", new SubsamplingLayer.Builder(PoolingType.MAX)
-                        .kernelSize(2, 2)
-                        .stride(2, 2)
-                        .build(), "dis_conv2d_layer")
-                .addLayer("dis_dense_layer_1", new DenseLayer.Builder()
-                        .updater(new Sgd(learning_rate))
-                        .nOut(2000)
-                        .build(), "dis_maxpool_layer")
-                .addLayer("dis_dense_layer_2", new DenseLayer.Builder()
-                        .updater(new Sgd(frozen_learning_rate))
-                        .nOut(2000)
-                        .build(), "dis_dense_layer_1")
-                .addLayer("dis_output_layer_3", new OutputLayer.Builder(LossFunctions.LossFunction.MCXENT)
-                        .updater(new Sgd(learning_rate))
-                        .nOut(numClasses)
-                        .activation(Activation.SOFTMAX)
-                        .build(), "dis_dense_layer_2")
-                .setOutputs("dis_output_layer_3")
-                .build());
-        dis.init();
-        System.out.println(dis.summary());
-
-        ComputationGraph gen = new ComputationGraph(new NeuralNetConfiguration.Builder()
-                .seed(666)
-                .activation(Activation.ELU)
-                .weightInit(WeightInit.XAVIER)
-                .l2(learning_rate * 0.005)
-                .graphBuilder()
-                .addInputs("gen_input_layer_0")
-                .setInputTypes(InputType.convolutionalFlat(28, 28, 1))
-                .addLayer("gen_batch_1", new BatchNormalization.Builder()
-                        .build(), "gen_input_layer_0")
-                .addLayer("gen_conv2d_layer", new ConvolutionLayer.Builder(5, 5)
-                        .stride(1, 1)
-                        .updater(new Sgd(learning_rate))
-                        .nIn(1)
-                        .nOut(1)
-                        .build(), "gen_batch_1")
-                .addLayer("gen_maxpool_layer", new SubsamplingLayer.Builder(PoolingType.MAX).kernelSize(2, 2).stride(2, 2).build(), "gen_conv2d_layer")
-                .addLayer("gen_dense_layer_1", new DenseLayer.Builder().updater(new Sgd(learning_rate)).nOut(2000).build(), "gen_maxpool_layer")
-                .addLayer("gen_dense_layer_2", new DenseLayer.Builder().updater(new Sgd(frozen_learning_rate)).nOut(2000).build(), "gen_dense_layer_1")
-                .addLayer("gen_output_layer_3", new OutputLayer.Builder(LossFunctions.LossFunction.MCXENT).updater(new Sgd(learning_rate)).nOut(numClasses).activation(Activation.SOFTMAX).build(), "gen_dense_layer_2")
-                .setOutputs("gen_output_layer_3")
-                .build());
-        gen.init();
-        System.out.println(gen.summary());
-
         TrainingMaster tm = new ParameterAveragingTrainingMaster.Builder(batchSizePerWorker)
                 .averagingFrequency(5)
                 .workerPrefetchNumBatches(2)
@@ -165,7 +184,7 @@ public class dl4jGAN {
 
         Evaluation evaluation = sparkNet.doEvaluation(testData, batchSizePerWorker, new Evaluation(numClasses))[0];
         log.info(evaluation.stats());
-
+/*
         gen.getLayer("gen_batch_1").setParam("gamma", dis.getLayer("dis_batch_1").getParam("gamma"));
         gen.getLayer("gen_batch_1").setParam("beta", dis.getLayer("dis_batch_1").getParam("beta"));
         gen.getLayer("gen_batch_1").setParam("mean", dis.getLayer("dis_batch_1").getParam("mean"));
@@ -188,6 +207,7 @@ public class dl4jGAN {
 
         Evaluation evaluation_gen = sparkNetGen.doEvaluation(testData, batchSizePerWorker, new Evaluation(numClasses))[0];
         log.info(evaluation_gen.stats());
+*/
 
         int counter = 0;
         INDArray testDataPred = Nd4j.zeros(numTestPred, numClasses);
