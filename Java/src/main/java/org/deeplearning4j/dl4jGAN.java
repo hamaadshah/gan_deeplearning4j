@@ -11,7 +11,6 @@ import org.datavec.api.records.reader.impl.csv.CSVRecordReader;
 import org.datavec.api.split.FileSplit;
 import org.datavec.api.util.ClassPathResource;
 
-
 import org.deeplearning4j.datasets.datavec.RecordReaderDataSetIterator;
 import org.deeplearning4j.eval.Evaluation;
 import org.deeplearning4j.nn.conf.inputs.InputType;
@@ -24,7 +23,9 @@ import org.deeplearning4j.spark.api.TrainingMaster;
 import org.deeplearning4j.spark.impl.graph.SparkComputationGraph;
 import org.deeplearning4j.spark.impl.paramavg.ParameterAveragingTrainingMaster;
 
+import org.nd4j.jita.conf.CudaEnvironment;
 import org.nd4j.linalg.activations.*;
+import org.nd4j.linalg.api.buffer.DataBuffer;
 import org.nd4j.linalg.api.ndarray.INDArray;
 import org.nd4j.linalg.dataset.DataSet;
 import org.nd4j.linalg.dataset.api.iterator.DataSetIterator;
@@ -40,7 +41,7 @@ public class dl4jGAN {
 
     private static final int batchSizePerWorker = 1000;
     private static final int batchSizePred = 1;
-    private static final int numEpochs = 10;
+    private static final int numEpochs = 1;
     private static final int numLinesToSkip = 0;
     private static final int labelIndex = 784;
     private static final int numClasses = 2;
@@ -56,6 +57,16 @@ public class dl4jGAN {
     }
 
     private void GAN(String[] args) throws Exception {
+        Nd4j.setDataType(DataBuffer.Type.FLOAT);
+
+        CudaEnvironment.getInstance().getConfiguration()
+                .allowMultiGPU(true)
+                .setMaximumDeviceCache(4L * 2L * 1024L * 1024L * 1024L)
+                .allowCrossDeviceAccess(true)
+                .setVerbose(true);
+        System.out.println(CudaEnvironment.getInstance().getConfiguration());
+        System.out.println(CudaEnvironment.getInstance().getCurrentDeviceArchitecture());
+
         Nd4j.getRandom().setSeed(666);
 
         for (int i = 0; i < args.length; i++) {
@@ -245,7 +256,7 @@ public class dl4jGAN {
 
         SparkConf sparkConf = new SparkConf();
         sparkConf.setMaster("local[*]");
-        sparkConf.setAppName("DL4J Apache Spark: Generative Adversarial Network");
+        sparkConf.setAppName("DL4J Apache Spark: Generative Adversarial Network!");
         JavaSparkContext sc = new JavaSparkContext(sparkConf);
 
         TrainingMaster tm = new ParameterAveragingTrainingMaster.Builder(batchSizePerWorker)
@@ -262,16 +273,20 @@ public class dl4jGAN {
         DataSetIterator iterTrain = new RecordReaderDataSetIterator(recordReaderTrain, batchSizePerWorker, labelIndex, numClasses);
 
         for (int epoch = 0; epoch < numEpochs; epoch++) {
+            int batch_counter = 0;
             while (iterTrain.hasNext()) {
                 List<DataSet> trainDataList = new ArrayList<>();
                 trainDataList.add(iterTrain.next());
                 for (int i = 0; i < batchSizePerWorker; i++) {
+                    // [Fake, Real].
                     trainDataList.add(new DataSet(gen.output(Nd4j.randn(1, zSize))[0], Nd4j.hstack(Nd4j.ones(1, 1), Nd4j.zeros(1, 1))));
                 }
                 JavaRDD<DataSet> trainData = sc.parallelize(trainDataList);
                 sparkDis.fit(trainData);
+                log.info("Completed Batch {}!", batch_counter);
+                batch_counter++;
             }
-            log.info("Completed Epoch: {}.", epoch);
+            log.info("Completed Epoch {}!", epoch);
         }
 
         RecordReader recordReaderTest = new CSVRecordReader(numLinesToSkip, delimiter);
@@ -290,7 +305,7 @@ public class dl4jGAN {
 
         JavaRDD<DataSet> testData = sc.parallelize(testDataList);
 
-        log.info("Number of testing examples: {}.", testDataList.iterator());
+        log.info("Number of testing examples: {}!", testDataList.iterator());
 
         Evaluation evaluation = sparkDis.doEvaluation(testData, batchSizePred, new Evaluation(numClasses))[0];
         log.info(evaluation.stats());
