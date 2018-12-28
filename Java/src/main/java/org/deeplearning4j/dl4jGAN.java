@@ -1,6 +1,7 @@
 package org.deeplearning4j;
 
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 
 import org.apache.spark.SparkConf;
 import org.apache.spark.api.java.JavaRDD;
@@ -55,6 +56,8 @@ public class dl4jGAN {
     }
 
     private void GAN(String[] args) throws Exception {
+        Nd4j.getRandom().setSeed(666);
+
         for (int i = 0; i < args.length; i++) {
             System.out.println(args[i]);
         }
@@ -93,7 +96,7 @@ public class dl4jGAN {
                         .updater(new Sgd(learning_rate))
                         .nOut(1024)
                         .build(),"dis_maxpool_layer_5")
-                .addLayer("dis_output_layer_7", new OutputLayer.Builder(LossFunctions.LossFunction.MCXENT)
+                .addLayer("dis_output_layer_7", new OutputLayer.Builder(LossFunctions.LossFunction.XENT)
                         .updater(new Sgd(learning_rate))
                         .nOut(1)
                         .activation(Activation.SIGMOID)
@@ -148,15 +151,15 @@ public class dl4jGAN {
                         .nIn(64)
                         .nOut(1)
                         .build(),"gen_deconv2d_7")
-                .setOutputs("gen_conv2d_8")
+                .addLayer("gen_output_layer_9", new DenseLayer.Builder()
+                        .updater(new Sgd(learning_rate))
+                        .activation(Activation.SIGMOID)
+                        .nOut(28 * 28)
+                        .build(),"gen_conv2d_8")
+                .setOutputs("gen_output_layer_9")
                 .build());
         gen.init();
         System.out.println(gen.summary());
-        INDArray z = Nd4j.zeros(1, 2);
-        z.putScalar(0, 0,-0.8);
-        z.putScalar(0, 1,1);
-        System.out.println(Arrays.toString(gen.output(z)));
-        System.out.println(Arrays.toString(gen.output(z)[0].shape()));
 
         ComputationGraph gan = new ComputationGraph(new NeuralNetConfiguration.Builder()
                 .seed(666)
@@ -230,7 +233,7 @@ public class dl4jGAN {
                         .updater(new Sgd(learning_rate))
                         .nOut(1024)
                         .build(),"gan_dis_maxpool_layer_13")
-                .addLayer("gan_dis_output_layer_15", new OutputLayer.Builder(LossFunctions.LossFunction.MCXENT)
+                .addLayer("gan_dis_output_layer_15", new OutputLayer.Builder(LossFunctions.LossFunction.XENT)
                         .updater(new Sgd(learning_rate))
                         .nOut(1)
                         .activation(Activation.SIGMOID)
@@ -239,7 +242,6 @@ public class dl4jGAN {
                 .build());
         gan.init();
         System.out.println(gan.summary());
-        System.out.println(Arrays.toString(gan.output(z)));
 
         SparkConf sparkConf = new SparkConf();
         sparkConf.setMaster("local[*]");
@@ -247,27 +249,57 @@ public class dl4jGAN {
         JavaSparkContext sc = new JavaSparkContext(sparkConf);
 
         RecordReader recordReaderTrain = new CSVRecordReader(numLinesToSkip, delimiter);
-        recordReaderTrain.initialize(new FileSplit(new ClassPathResource("mnist_train.txt").getFile()));
+        recordReaderTrain.initialize(new FileSplit(new ClassPathResource("mnist_train.csv").getFile()));
+
         DataSetIterator iterTrain = new RecordReaderDataSetIterator(recordReaderTrain, batchSizePerWorker, labelIndex, numClasses);
+
         List<DataSet> trainDataList = new ArrayList<>();
         while (iterTrain.hasNext()) {
             trainDataList.add(iterTrain.next());
         }
+
         int numTrainPred = trainDataList.size() * batchSizePerWorker;
-        System.out.println(numTrainPred);
-        iterTrain.reset();
+
+        INDArray gen_images_data = Nd4j.zeros(numTrainPred, (28 * 28) + 1);
+        for (int i = 0; i < numTrainPred; i++) {
+            gen_images_data.putRow(i, Nd4j.hstack(gen.output(Nd4j.randn(1, 2))[0], Nd4j.zeros(1,1)));
+        }
+        Nd4j.writeNumpy(gen_images_data, "/Users/samson/Projects/gan_deeplearning4j/Java/src/main/resources/gen_images_data_train.csv", ",");
+        TimeUnit.SECONDS.sleep(5);
+
+        recordReaderTrain.initialize(new FileSplit(new ClassPathResource("gen_images_data_train.csv").getFile()));
+        iterTrain = new RecordReaderDataSetIterator(recordReaderTrain, batchSizePerWorker, labelIndex, numClasses);
+        while (iterTrain.hasNext()) {
+            trainDataList.add(iterTrain.next());
+        }
+
         JavaRDD<DataSet> trainData = sc.parallelize(trainDataList);
 
         RecordReader recordReaderTest = new CSVRecordReader(numLinesToSkip, delimiter);
-        recordReaderTest.initialize(new FileSplit(new ClassPathResource("mnist_test.txt").getFile()));
+        recordReaderTest.initialize(new FileSplit(new ClassPathResource("mnist_test.csv").getFile()));
+
         DataSetIterator iterTest = new RecordReaderDataSetIterator(recordReaderTest, batchSizePred, labelIndex, numClasses);
+
         List<DataSet> testDataList = new ArrayList<>();
         while (iterTest.hasNext()) {
             testDataList.add(iterTest.next());
         }
+
         int numTestPred = testDataList.size() * batchSizePred;
-        System.out.println(numTestPred);
-        iterTest.reset();
+
+        gen_images_data = Nd4j.zeros(numTestPred, (28 * 28) + 1);
+        for (int i = 0; i < numTestPred; i++) {
+            gen_images_data.putRow(i, Nd4j.hstack(gen.output(Nd4j.randn(1, 2))[0], Nd4j.zeros(1,1)));
+        }
+        Nd4j.writeNumpy(gen_images_data, "/Users/samson/Projects/gan_deeplearning4j/Java/src/main/resources/gen_images_data_test.csv", ",");
+        TimeUnit.SECONDS.sleep(5);
+
+        recordReaderTest.initialize(new FileSplit(new ClassPathResource("gen_images_data_test.csv").getFile()));
+        iterTest = new RecordReaderDataSetIterator(recordReaderTest, batchSizePerWorker, labelIndex, numClasses);
+        while (iterTest.hasNext()) {
+            testDataList.add(iterTest.next());
+        }
+        
         JavaRDD<DataSet> testData = sc.parallelize(testDataList);
 
         TrainingMaster tm = new ParameterAveragingTrainingMaster.Builder(batchSizePerWorker)
@@ -292,7 +324,7 @@ public class dl4jGAN {
             testDataPred.putRow(counter, sparkNet.getNetwork().output(iterTest.next().getFeatureMatrix())[0]);
             counter++;
         }
-        Nd4j.writeNumpy(testDataPred, "testDataPredMnist.csv", ",");
+        Nd4j.writeNumpy(testDataPred, "/Users/samson/Projects/gan_deeplearning4j/Java/src/main/resources/testDataPredMnist.csv", ",");
 
         tm.deleteTempFiles(sc);
     }
