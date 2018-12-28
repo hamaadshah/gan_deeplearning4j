@@ -1,7 +1,6 @@
 package org.deeplearning4j;
 
 import java.util.*;
-import java.util.concurrent.TimeUnit;
 
 import org.apache.spark.SparkConf;
 import org.apache.spark.api.java.JavaRDD;
@@ -39,7 +38,7 @@ import org.slf4j.LoggerFactory;
 public class dl4jGAN {
     private static final Logger log = LoggerFactory.getLogger(dl4jGAN.class);
 
-    private static final int batchSizePerWorker = 100;
+    private static final int batchSizePerWorker = 1000;
     private static final int batchSizePred = 1;
     private static final int numEpochs = 10;
     private static final int numLinesToSkip = 0;
@@ -249,24 +248,31 @@ public class dl4jGAN {
         sparkConf.setAppName("DL4J Apache Spark: Generative Adversarial Network");
         JavaSparkContext sc = new JavaSparkContext(sparkConf);
 
+        TrainingMaster tm = new ParameterAveragingTrainingMaster.Builder(batchSizePerWorker)
+                .averagingFrequency(100)
+                .workerPrefetchNumBatches(0)
+                .batchSizePerWorker(batchSizePerWorker)
+                .build();
+
+        SparkComputationGraph sparkDis= new SparkComputationGraph(sc, dis, tm);
+
         RecordReader recordReaderTrain = new CSVRecordReader(numLinesToSkip, delimiter);
         recordReaderTrain.initialize(new FileSplit(new ClassPathResource("mnist_train.csv").getFile()));
 
         DataSetIterator iterTrain = new RecordReaderDataSetIterator(recordReaderTrain, batchSizePerWorker, labelIndex, numClasses);
 
-        List<DataSet> trainDataList = new ArrayList<>();
-        while (iterTrain.hasNext()) {
-            trainDataList.add(iterTrain.next());
+        for (int epoch = 0; epoch < numEpochs; epoch++) {
+            while (iterTrain.hasNext()) {
+                List<DataSet> trainDataList = new ArrayList<>();
+                trainDataList.add(iterTrain.next());
+                for (int i = 0; i < batchSizePerWorker; i++) {
+                    trainDataList.add(new DataSet(gen.output(Nd4j.randn(1, zSize))[0], Nd4j.hstack(Nd4j.ones(1, 1), Nd4j.zeros(1, 1))));
+                }
+                JavaRDD<DataSet> trainData = sc.parallelize(trainDataList);
+                sparkDis.fit(trainData);
+            }
+            log.info("Completed Epoch: {}.", epoch);
         }
-
-        int numTrainPred = trainDataList.size() * batchSizePerWorker;
-        log.info("Number of training examples: {}.", numTrainPred);
-
-        for (int i = 0; i < batchSizePerWorker; i++) {
-            trainDataList.add(new DataSet(gen.output(Nd4j.randn(1, zSize))[0], Nd4j.hstack(Nd4j.ones(1,1), Nd4j.zeros(1,1))));
-        }
-
-        JavaRDD<DataSet> trainData = sc.parallelize(trainDataList);
 
         RecordReader recordReaderTest = new CSVRecordReader(numLinesToSkip, delimiter);
         recordReaderTest.initialize(new FileSplit(new ClassPathResource("mnist_test.csv").getFile()));
@@ -278,36 +284,22 @@ public class dl4jGAN {
             testDataList.add(iterTest.next());
         }
 
-        int numTestPred = testDataList.size() * batchSizePred;
-        log.info("Number of testing examples: {}.", numTestPred);
-
-        for (int i = 0; i < batchSizePerWorker; i++) {
+        for (int i = 0; i < testDataList.size(); i++) {
             testDataList.add(new DataSet(gen.output(Nd4j.randn(1, zSize))[0], Nd4j.hstack(Nd4j.ones(1,1), Nd4j.zeros(1,1))));
         }
 
         JavaRDD<DataSet> testData = sc.parallelize(testDataList);
 
-        TrainingMaster tm = new ParameterAveragingTrainingMaster.Builder(batchSizePerWorker)
-                .averagingFrequency(5)
-                .workerPrefetchNumBatches(2)
-                .batchSizePerWorker(batchSizePerWorker)
-                .build();
+        log.info("Number of testing examples: {}.", testDataList.iterator());
 
-        SparkComputationGraph sparkNet = new SparkComputationGraph(sc, dis, tm);
-
-        for (int i = 0; i < numEpochs; i++) {
-            sparkNet.fit(trainData);
-            log.info("Completed Epoch: {}.", i);
-        }
-
-        Evaluation evaluation = sparkNet.doEvaluation(testData, batchSizePerWorker, new Evaluation(numClasses))[0];
+        Evaluation evaluation = sparkDis.doEvaluation(testData, batchSizePred, new Evaluation(numClasses))[0];
         log.info(evaluation.stats());
 
         int counter = 0;
-        INDArray testDataPred = Nd4j.zeros(numTestPred + batchSizePerWorker, numClasses);
+        INDArray testDataPred = Nd4j.zeros(testDataList.size(), numClasses);
         Iterator<DataSet> testDataListIter = testDataList.iterator();
         while (testDataListIter.hasNext()) {
-            testDataPred.putRow(counter, sparkNet.getNetwork().output(testDataListIter.next().getFeatureMatrix())[0]);
+            testDataPred.putRow(counter, sparkDis.getNetwork().output(testDataListIter.next().getFeatureMatrix())[0]);
             counter++;
         }
         Nd4j.writeNumpy(testDataPred, "/Users/samson/Projects/gan_deeplearning4j/Java/src/main/resources/testDataPredMnist.csv", ",");
