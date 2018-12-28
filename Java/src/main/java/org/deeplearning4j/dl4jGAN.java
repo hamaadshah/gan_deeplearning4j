@@ -95,8 +95,8 @@ public class dl4jGAN {
                         .build(),"dis_maxpool_layer_5")
                 .addLayer("dis_output_layer_7", new OutputLayer.Builder(LossFunctions.LossFunction.MCXENT)
                         .updater(new Sgd(learning_rate))
-                        .nOut(numClasses)
-                        .activation(Activation.SOFTMAX)
+                        .nOut(1)
+                        .activation(Activation.SIGMOID)
                         .build(),"dis_dense_layer_6")
                 .setOutputs("dis_output_layer_7")
                 .build());
@@ -119,15 +119,15 @@ public class dl4jGAN {
                         .build(),"gen_batch_1")
                 .addLayer("gen_dense_layer_3", new DenseLayer.Builder()
                         .updater(new Sgd(frozen_learning_rate))
-                        .nOut(28 * 28 * 8)
+                        .nOut(7 * 7 * 128)
                         .build(),"gen_dense_layer_2")
                 .addLayer("gen_batch_4", new BatchNormalization.Builder()
                         .build(),"gen_dense_layer_3")
-                .inputPreProcessor("gen_deconv2d_5", new FeedForwardToCnnPreProcessor(28, 28, 8))
-                .addLayer("gen_deconv2d_5", new Deconvolution2D.Builder(5, 5)
+                .inputPreProcessor("gen_deconv2d_5", new FeedForwardToCnnPreProcessor(7, 7, 128))
+                .addLayer("gen_deconv2d_5", new Deconvolution2D.Builder(6, 6)
                         .stride(2, 2)
                         .updater(new Sgd(learning_rate))
-                        .nIn(8)
+                        .nIn(128)
                         .nOut(64)
                         .build(),"gen_batch_4")
                 .addLayer("gen_conv2d_6", new ConvolutionLayer.Builder(5, 5)
@@ -136,7 +136,7 @@ public class dl4jGAN {
                         .nIn(64)
                         .nOut(64)
                         .build(),"gen_deconv2d_5")
-                .addLayer("gen_deconv2d_7", new Deconvolution2D.Builder(5, 5)
+                .addLayer("gen_deconv2d_7", new Deconvolution2D.Builder(6, 6)
                         .stride(2, 2)
                         .updater(new Sgd(learning_rate))
                         .nIn(64)
@@ -152,6 +152,11 @@ public class dl4jGAN {
                 .build());
         gen.init();
         System.out.println(gen.summary());
+        INDArray z = Nd4j.zeros(1, 2);
+        z.putScalar(0, 0,-0.8);
+        z.putScalar(0, 1,1);
+        System.out.println(Arrays.toString(gen.output(z)));
+        System.out.println(Arrays.toString(gen.output(z)[0].shape()));
 
         ComputationGraph gan = new ComputationGraph(new NeuralNetConfiguration.Builder()
                 .seed(666)
@@ -169,15 +174,15 @@ public class dl4jGAN {
                         .build(),"gan_batch_1")
                 .addLayer("gan_dense_layer_3", new DenseLayer.Builder()
                         .updater(new Sgd(frozen_learning_rate))
-                        .nOut(28 * 28 * 8)
+                        .nOut(7 * 7 * 128)
                         .build(),"gan_dense_layer_2")
                 .addLayer("gan_batch_4", new BatchNormalization.Builder()
                         .build(),"gan_dense_layer_3")
-                .inputPreProcessor("gan_deconv2d_5", new FeedForwardToCnnPreProcessor(28, 28, 8))
-                .addLayer("gan_deconv2d_5", new Deconvolution2D.Builder(5, 5)
+                .inputPreProcessor("gan_deconv2d_5", new FeedForwardToCnnPreProcessor(7, 7, 128))
+                .addLayer("gan_deconv2d_5", new Deconvolution2D.Builder(6, 6)
                         .stride(2, 2)
                         .updater(new Sgd(learning_rate))
-                        .nIn(8)
+                        .nIn(128)
                         .nOut(64)
                         .build(),"gan_batch_4")
                 .addLayer("gan_conv2d_6", new ConvolutionLayer.Builder(5, 5)
@@ -186,7 +191,7 @@ public class dl4jGAN {
                         .nIn(64)
                         .nOut(64)
                         .build(),"gan_deconv2d_5")
-                .addLayer("gan_deconv2d_7", new Deconvolution2D.Builder(5, 5)
+                .addLayer("gan_deconv2d_7", new Deconvolution2D.Builder(6, 6)
                         .stride(2, 2)
                         .updater(new Sgd(learning_rate))
                         .nIn(64)
@@ -227,18 +232,14 @@ public class dl4jGAN {
                         .build(),"gan_dis_maxpool_layer_13")
                 .addLayer("gan_dis_output_layer_15", new OutputLayer.Builder(LossFunctions.LossFunction.MCXENT)
                         .updater(new Sgd(learning_rate))
-                        .nOut(numClasses)
-                        .activation(Activation.SOFTMAX)
+                        .nOut(1)
+                        .activation(Activation.SIGMOID)
                         .build(),"gan_dis_dense_layer_14")
                 .setOutputs("gan_dis_output_layer_15")
                 .build());
         gan.init();
         System.out.println(gan.summary());
-
-        for (int i = 0; i < gen.getNumLayers(); i++) {
-            System.out.println(gen.getLayer(i).getParam("b"));
-            System.out.println(gen.getLayer(i).getParam("W"));
-        }
+        System.out.println(Arrays.toString(gan.output(z)));
 
         SparkConf sparkConf = new SparkConf();
         sparkConf.setMaster("local[*]");
@@ -284,30 +285,6 @@ public class dl4jGAN {
 
         Evaluation evaluation = sparkNet.doEvaluation(testData, batchSizePerWorker, new Evaluation(numClasses))[0];
         log.info(evaluation.stats());
-/*
-        gen.getLayer("gen_batch_1").setParam("gamma", dis.getLayer("dis_batch_1").getParam("gamma"));
-        gen.getLayer("gen_batch_1").setParam("beta", dis.getLayer("dis_batch_1").getParam("beta"));
-        gen.getLayer("gen_batch_1").setParam("mean", dis.getLayer("dis_batch_1").getParam("mean"));
-        gen.getLayer("gen_batch_1").setParam("var", dis.getLayer("dis_batch_1").getParam("var"));
-        gen.getLayer("gen_conv2d_layer").setParam("b", dis.getLayer("dis_conv2d_layer").getParam("b"));
-        gen.getLayer("gen_conv2d_layer").setParam("W", dis.getLayer("dis_conv2d_layer").getParam("W"));
-        gen.getLayer("gen_dense_layer_1").setParam("b", dis.getLayer("dis_dense_layer_1").getParam("b"));
-        gen.getLayer("gen_dense_layer_1").setParam("W", dis.getLayer("dis_dense_layer_1").getParam("W"));
-        gen.getLayer("gen_dense_layer_2").setParam("b", dis.getLayer("dis_dense_layer_2").getParam("b"));
-        gen.getLayer("gen_dense_layer_2").setParam("W", dis.getLayer("dis_dense_layer_2").getParam("W"));
-        gen.getLayer("gen_output_layer_3").setParam("b", dis.getLayer("dis_output_layer_3").getParam("b"));
-        gen.getLayer("gen_output_layer_3").setParam("W", dis.getLayer("dis_output_layer_3").getParam("W"));
-
-        SparkComputationGraph sparkNetGen = new SparkComputationGraph(sc, gen, tm);
-
-        for (int i = 0; i < numEpochs; i++) {
-            sparkNetGen.fit(trainData);
-            log.info("Completed Epoch: {}.", i);
-        }
-
-        Evaluation evaluation_gen = sparkNetGen.doEvaluation(testData, batchSizePerWorker, new Evaluation(numClasses))[0];
-        log.info(evaluation_gen.stats());
-*/
 
         int counter = 0;
         INDArray testDataPred = Nd4j.zeros(numTestPred, numClasses);
