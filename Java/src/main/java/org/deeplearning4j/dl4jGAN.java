@@ -283,10 +283,10 @@ public class dl4jGAN {
                 }
                 JavaRDD<DataSet> trainData = sc.parallelize(trainDataList);
                 sparkDis.fit(trainData);
-                log.info("Completed Batch {}!", batch_counter);
+                log.info("Completed Batch {}!", batch_counter + 1);
                 batch_counter++;
             }
-            log.info("Completed Epoch {}!", epoch);
+            log.info("Completed Epoch {}!", epoch + 1);
         }
 
         RecordReader recordReaderTest = new CSVRecordReader(numLinesToSkip, delimiter);
