@@ -49,7 +49,7 @@ public class dl4jGAN {
     private static final int labelIndex = 784;
     private static final int numFeatures = 784;
     private static final int numClasses = 10;
-    private static final int numEpochs = 50;
+    private static final int numEpochs = 100;
     private static final int numGenSamples = 20; // This will be a grid so effectively we get {numGenSamples * numGenSamples} samples.
     private static final int imageHeight = 28;
     private static final int imageWidth = 28;
