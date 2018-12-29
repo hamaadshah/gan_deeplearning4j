@@ -44,22 +44,23 @@ public class dl4jGAN {
 
     private static final int batchSizePerWorker = 50;
     private static final int batchSizePred = 50;
-    private static final int numIterations = 50000;
-    private static final int numLinesToSkip = 0;
-    private static final int labelIndex = 784;
-    private static final int numFeatures = 784;
-    private static final int numClasses = 10;
-    private static final int numEpochs = 100;
-    private static final int numGenSamples = 20; // This will be a grid so effectively we get {numGenSamples * numGenSamples} samples.
     private static final int imageHeight = 28;
     private static final int imageWidth = 28;
-    private static final int imageChannels = 1;
+    private static final int imageChannels = 1;    private static final int numIterations = 100000;
+    private static final int labelIndex = 784;
+    private static final int numClasses = 10;
+    private static final int numEpochs = 100;
+    private static final int numFeatures = 784;
+    private static final int numGenSamples = 50; // This will be a grid so effectively we get {numGenSamples * numGenSamples} samples.
+    private static final int numLinesToSkip = 0;
+    private static final int printEvery = 10000;
+
     private static final int numberOfTheBeast = 666;
     private static final int zSize = 2;
 
-    private static final double dis_learning_rate = 0.0002;
-    private static final double gen_learning_rate = 0.0004;
+    private static final double dis_learning_rate = 0.01;
     private static final double frozen_learning_rate = 0.0;
+    private static final double gen_learning_rate = 0.02;
 
     private static final String delimiter = ",";
     private static final String resPath = "/Users/samson/Projects/gan_deeplearning4j/Java/src/main/resources/";
@@ -392,11 +393,14 @@ public class dl4jGAN {
             batch_counter += batchSizePerWorker;
             log.info("Completed Batch {}!", batch_counter);
 
-            out = gen.output(Nd4j.vstack(z))[0].reshape(numGenSamples * numGenSamples, numFeatures);
-            Nd4j.writeNumpy(out, String.format("%sout_%d.csv", resPath, batch_counter), delimiter);
+            if ((batch_counter % printEvery) == 0) {
+                out = gen.output(Nd4j.vstack(z))[0].reshape(numGenSamples * numGenSamples, numFeatures);
+                Nd4j.writeNumpy(out, String.format("%sout_%d.csv", resPath, batch_counter), delimiter);
+            }
 
             if (!iterTrain.hasNext() && batch_counter < numIterations) {
                 iterTrain.reset();
+                batch_counter = 0;
             }
         }
 
