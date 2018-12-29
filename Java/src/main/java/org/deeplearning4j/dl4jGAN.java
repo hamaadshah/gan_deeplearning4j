@@ -43,7 +43,7 @@ import org.slf4j.LoggerFactory;
 public class dl4jGAN {
     private static final Logger log = LoggerFactory.getLogger(dl4jGAN.class);
 
-    private static final int batchSizePerWorker = 100;
+    private static final int batchSizePerWorker = 50;
     private static final int batchSizePred = 50;
     private static final int numIterations = 10000;
     private static final int numLinesToSkip = 0;
@@ -131,6 +131,8 @@ public class dl4jGAN {
                 .build());
         dis.init();
         System.out.println(dis.summary());
+        System.out.println(Arrays.toString(dis.output(Nd4j.randn(1, 784))[0].shape()));
+        assert dis.output(Nd4j.randn(1, 784))[0].shape() == new int[]{1, 2};
 
         // Frozen generator.
         ComputationGraph gen = new ComputationGraph(new NeuralNetConfiguration.Builder()
@@ -163,6 +165,7 @@ public class dl4jGAN {
                         .build(), "gen_batch_4")
                 .addLayer("gen_conv2d_6", new ConvolutionLayer.Builder(5, 5)
                         .stride(1, 1)
+                        .padding(2, 2)
                         .updater(new RmsProp(frozen_learning_rate, 1e-8, 1e-8))
                         .nIn(128)
                         .nOut(64)
@@ -171,19 +174,17 @@ public class dl4jGAN {
                         .build(), "gen_conv2d_6")
                 .addLayer("gen_conv2d_8", new ConvolutionLayer.Builder(5, 5)
                         .stride(1, 1)
+                        .padding(2, 2)
                         .updater(new RmsProp(frozen_learning_rate, 1e-8, 1e-8))
                         .nIn(64)
                         .nOut(1)
                         .build(), "gen_deconv2d_7")
-                .addLayer("gen_output_layer_9", new DenseLayer.Builder()
-                        .updater(new RmsProp(frozen_learning_rate, 1e-8, 1e-8))
-                        .activation(Activation.SIGMOID)
-                        .nOut(28 * 28)
-                        .build(), "gen_conv2d_8")
-                .setOutputs("gen_output_layer_9")
+                .setOutputs("gen_conv2d_8")
                 .build());
         gen.init();
         System.out.println(gen.summary());
+        System.out.println(Arrays.toString(gen.output(Nd4j.randn(1, 2))[0].shape()));
+        assert gen.output(Nd4j.randn(1, 784))[0].shape() == new int[]{1, 1, 28, 28};
 
         // GAN with unfrozen generator and frozen discriminator.
         ComputationGraph gan = new ComputationGraph(new NeuralNetConfiguration.Builder()
@@ -216,6 +217,7 @@ public class dl4jGAN {
                         .build(), "gan_batch_4")
                 .addLayer("gan_conv2d_6", new ConvolutionLayer.Builder(5, 5)
                         .stride(1, 1)
+                        .padding(2, 2)
                         .updater(new RmsProp(gen_learning_rate, 1e-8, 1e-8))
                         .nIn(128)
                         .nOut(64)
@@ -224,20 +226,15 @@ public class dl4jGAN {
                         .build(), "gan_conv2d_6")
                 .addLayer("gan_conv2d_8", new ConvolutionLayer.Builder(5, 5)
                         .stride(1, 1)
+                        .padding(2, 2)
                         .updater(new RmsProp(gen_learning_rate, 1e-8, 1e-8))
                         .nIn(64)
                         .nOut(1)
                         .build(), "gan_deconv2d_7")
-                .addLayer("gan_dense_layer_9", new DenseLayer.Builder()
-                        .updater(new RmsProp(gen_learning_rate, 1e-8, 1e-8))
-                        .activation(Activation.SIGMOID)
-                        .nOut(28 * 28)
-                        .build(), "gan_conv2d_8")
 
                 .addLayer("gan_dis_batch_layer_10", new BatchNormalization.Builder()
                         .updater(new RmsProp(frozen_learning_rate, 1e-8, 1e-8))
-                        .build(), "gan_dense_layer_9")
-                .inputPreProcessor("gan_dis_conv2d_layer_11", new FeedForwardToCnnPreProcessor(28, 28, 1))
+                        .build(), "gan_conv2d_8")
                 .addLayer("gan_dis_conv2d_layer_11", new ConvolutionLayer.Builder(5, 5)
                         .stride(2, 2)
                         .updater(new RmsProp(frozen_learning_rate, 1e-8, 1e-8))
@@ -271,6 +268,8 @@ public class dl4jGAN {
                 .build());
         gan.init();
         System.out.println(gan.summary());
+        System.out.println(Arrays.toString(gan.output(Nd4j.randn(1, 2))[0].shape()));
+        assert gan.output(Nd4j.randn(1, 784))[0].shape() == new int[]{1, 2};
 
         SparkConf sparkConf = new SparkConf();
         sparkConf.setMaster("local[*]");
@@ -367,13 +366,10 @@ public class dl4jGAN {
             gen.getLayer("gen_conv2d_8").setParam("W", gan.getLayer("gan_conv2d_8").getParam("W"));
             gen.getLayer("gen_conv2d_8").setParam("b", gan.getLayer("gan_conv2d_8").getParam("b"));
 
-            gen.getLayer("gen_output_layer_9").setParam("W", gan.getLayer("gan_dense_layer_9").getParam("W"));
-            gen.getLayer("gen_output_layer_9").setParam("b", gan.getLayer("gan_dense_layer_9").getParam("b"));
-
             log.info("Completed Batch {}!", batch_counter + 1);
             batch_counter += batchSizePerWorker;
 
-            out = gen.output(Nd4j.rand(16, 2).muli(2.0).subi(1.0))[0];
+            out = gen.output(Nd4j.rand(16, 2).muli(2.0).subi(1.0))[0].reshape(16,784);
             Nd4j.writeNumpy(out, String.format("%sout_%d.csv", resPath, batch_counter), delimiter);
 
             if (!iterTrain.hasNext() && batch_counter < numIterations) {
