@@ -43,16 +43,16 @@ import org.slf4j.LoggerFactory;
 public class dl4jGAN {
     private static final Logger log = LoggerFactory.getLogger(dl4jGAN.class);
 
-    private static final int batchSizePerWorker = 50;
+    private static final int batchSizePerWorker = 100;
     private static final int batchSizePred = 50;
-    private static final int numIterations = 1000;
+    private static final int numIterations = 10000;
     private static final int numLinesToSkip = 0;
     private static final int labelIndex = 784;
     private static final int numClasses = 10;
     private static final int zSize = 2;
 
-    private static final double dis_learning_rate = 0.00025;
-    private static final double gen_learning_rate = 0.0005;
+    private static final double dis_learning_rate = 0.025;
+    private static final double gen_learning_rate = 0.05;
     private static final double frozen_learning_rate = 0.0;
 
     private static final String delimiter = ",";
@@ -278,7 +278,7 @@ public class dl4jGAN {
         JavaSparkContext sc = new JavaSparkContext(sparkConf);
 
         TrainingMaster tm = new ParameterAveragingTrainingMaster.Builder(batchSizePerWorker)
-                .averagingFrequency(1)
+                .averagingFrequency(10)
                 .rngSeed(666)
                 .storageLevel(StorageLevel.DISK_ONLY())
                 .workerPrefetchNumBatches(0)
@@ -295,17 +295,23 @@ public class dl4jGAN {
         List<DataSet> trainDataList = new ArrayList<>();
 
         JavaRDD<DataSet> trainDataDis, trainDataGen;
+        INDArray soften_labels_fake, soften_labels_real;
+        INDArray out;
 
         int batch_counter = 0;
         while (iterTrain.hasNext() && batch_counter < numIterations) {
             trainDataList.clear();
             // This is real data...
             // [Fake, Real].
-            trainDataList.add(new DataSet(iterTrain.next().getFeatureMatrix(), Nd4j.hstack(Nd4j.zeros(batchSizePerWorker, 1), Nd4j.ones(batchSizePerWorker, 1))));
+            soften_labels_fake = Nd4j.randn(batchSizePerWorker, 1).muli(0.05);
+            soften_labels_real = Nd4j.randn(batchSizePerWorker, 1).muli(0.05);
+            trainDataList.add(new DataSet(iterTrain.next().getFeatureMatrix(), Nd4j.hstack(Nd4j.zeros(batchSizePerWorker, 1).addi(soften_labels_fake), Nd4j.ones(batchSizePerWorker, 1).addi(soften_labels_real))));
 
             // ...and this is fake data.
             // [Fake, Real].
-            trainDataList.add(new DataSet(gen.output(Nd4j.randn(batchSizePerWorker, zSize))[0], Nd4j.hstack(Nd4j.ones(batchSizePerWorker, 1), Nd4j.zeros(batchSizePerWorker, 1))));
+            soften_labels_fake = Nd4j.randn(batchSizePerWorker, 1).muli(0.05);
+            soften_labels_real = Nd4j.randn(batchSizePerWorker, 1).muli(0.05);
+            trainDataList.add(new DataSet(gen.output(Nd4j.rand(batchSizePerWorker, zSize).muli(2.0).subi(1.0))[0], Nd4j.hstack(Nd4j.ones(batchSizePerWorker, 1).addi(soften_labels_fake), Nd4j.zeros(batchSizePerWorker, 1).addi(soften_labels_real))));
 
             log.info("Training discriminator!");
             trainDataDis = sc.parallelize(trainDataList).persist(StorageLevel.DISK_ONLY());
@@ -332,7 +338,7 @@ public class dl4jGAN {
             trainDataList.clear();
             // Tell the frozen discriminator that all the fake examples are real examples.
             // [Fake, Real].
-            trainDataList.add(new DataSet(Nd4j.randn(batchSizePerWorker, zSize), Nd4j.hstack(Nd4j.zeros(batchSizePerWorker, 1), Nd4j.ones(batchSizePerWorker, 1))));
+            trainDataList.add(new DataSet(Nd4j.rand(batchSizePerWorker, zSize).muli(2.0).subi(1.0), Nd4j.hstack(Nd4j.zeros(batchSizePerWorker, 1), Nd4j.ones(batchSizePerWorker, 1))));
 
             log.info("Training generator!");
             trainDataGen = sc.parallelize(trainDataList).persist(StorageLevel.DISK_ONLY());
@@ -367,13 +373,13 @@ public class dl4jGAN {
             log.info("Completed Batch {}!", batch_counter + 1);
             batch_counter += batchSizePerWorker;
 
+            out = gen.output(Nd4j.rand(16, 2).muli(2.0).subi(1.0))[0];
+            Nd4j.writeNumpy(out, String.format("%sout_%d.csv", resPath, batch_counter), delimiter);
+
             if (!iterTrain.hasNext() && batch_counter < numIterations) {
                 iterTrain.reset();
             }
         }
-
-        INDArray out = gen.output(Nd4j.randn(36, 2))[0];
-        Nd4j.writeNumpy(out, resPath + "out.csv", delimiter);
 
         RecordReader recordReaderTest = new CSVRecordReader(numLinesToSkip, delimiter);
         recordReaderTest.initialize(new FileSplit(new ClassPathResource("mnist_test.csv").getFile()));
