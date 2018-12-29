@@ -13,11 +13,14 @@ import org.datavec.api.split.FileSplit;
 import org.datavec.api.util.ClassPathResource;
 
 import org.deeplearning4j.datasets.datavec.RecordReaderDataSetIterator;
+import org.deeplearning4j.nn.api.*;
+import org.deeplearning4j.nn.conf.GradientNormalization;
 import org.deeplearning4j.nn.conf.inputs.InputType;
 import org.deeplearning4j.nn.conf.layers.*;
 import org.deeplearning4j.nn.conf.NeuralNetConfiguration;
 import org.deeplearning4j.nn.conf.preprocessor.FeedForwardToCnnPreProcessor;
 import org.deeplearning4j.nn.graph.ComputationGraph;
+import org.deeplearning4j.nn.transferlearning.*;
 import org.deeplearning4j.nn.weights.*;
 import org.deeplearning4j.spark.api.TrainingMaster;
 import org.deeplearning4j.spark.impl.graph.SparkComputationGraph;
@@ -26,6 +29,8 @@ import org.deeplearning4j.spark.impl.paramavg.ParameterAveragingTrainingMaster;
 import org.nd4j.jita.conf.CudaEnvironment;
 import org.nd4j.linalg.activations.*;
 import org.nd4j.linalg.api.buffer.DataBuffer;
+import org.nd4j.linalg.api.ndarray.INDArray;
+import org.nd4j.linalg.cpu.nativecpu.NDArray;
 import org.nd4j.linalg.dataset.DataSet;
 import org.nd4j.linalg.dataset.api.iterator.DataSetIterator;
 import org.nd4j.linalg.factory.Nd4j;
@@ -39,18 +44,19 @@ public class dl4jGAN {
     private static final Logger log = LoggerFactory.getLogger(dl4jGAN.class);
 
     private static final int batchSizePerWorker = 50;
-    private static final int batchSizePred = 100;
-    private static final int numIterations = 10000;
+    private static final int batchSizePred = 50;
+    private static final int numIterations = 1000;
     private static final int numLinesToSkip = 0;
     private static final int labelIndex = 784;
-    private static final int numClasses = 2;
+    private static final int numClasses = 10;
     private static final int zSize = 2;
 
-    private static final double dis_learning_rate = 0.0002;
-    private static final double gen_learning_rate = 0.0004;
+    private static final double dis_learning_rate = 0.00025;
+    private static final double gen_learning_rate = 0.0005;
     private static final double frozen_learning_rate = 0.0;
 
     private static final String delimiter = ",";
+    private static final String resPath = "/Users/samson/Projects/gan_deeplearning4j/Java/src/main/resources/";
 
     private static final boolean useGpu = false;
 
@@ -59,6 +65,10 @@ public class dl4jGAN {
     }
 
     private void GAN(String[] args) throws Exception {
+        for (int i = 0; i < args.length; i++) {
+            System.out.println(args[i]);
+        }
+
         if (useGpu) {
             Nd4j.setDataType(DataBuffer.Type.FLOAT);
 
@@ -73,13 +83,12 @@ public class dl4jGAN {
         Nd4j.getMemoryManager().togglePeriodicGc(true);
         System.out.println(Nd4j.getBackend());
 
-        for (int i = 0; i < args.length; i++) {
-            System.out.println(args[i]);
-        }
-
         // Unfrozen discriminator.
         ComputationGraph dis = new ComputationGraph(new NeuralNetConfiguration.Builder()
                 .seed(666)
+                .optimizationAlgo(OptimizationAlgorithm.STOCHASTIC_GRADIENT_DESCENT)
+                .gradientNormalization(GradientNormalization.ClipElementWiseAbsoluteValue)
+                .gradientNormalizationThreshold(1.0)
                 .activation(Activation.TANH)
                 .weightInit(WeightInit.XAVIER)
                 .l2(dis_learning_rate * 0.005)
@@ -87,11 +96,11 @@ public class dl4jGAN {
                 .addInputs("dis_input_layer_0")
                 .setInputTypes(InputType.convolutionalFlat(28, 28, 1))
                 .addLayer("dis_batch_layer_1", new BatchNormalization.Builder()
-                        .updater(new Sgd(dis_learning_rate))
+                        .updater(new RmsProp(dis_learning_rate, 1e-8, 1e-8))
                         .build(), "dis_input_layer_0")
                 .addLayer("dis_conv2d_layer_2", new ConvolutionLayer.Builder(5, 5)
                         .stride(2, 2)
-                        .updater(new Sgd(dis_learning_rate))
+                        .updater(new RmsProp(dis_learning_rate, 1e-8, 1e-8))
                         .nIn(1)
                         .nOut(64)
                         .build(), "dis_batch_layer_1")
@@ -101,7 +110,7 @@ public class dl4jGAN {
                         .build(), "dis_conv2d_layer_2")
                 .addLayer("dis_conv2d_layer_4", new ConvolutionLayer.Builder(5, 5)
                         .stride(2, 2)
-                        .updater(new Sgd(dis_learning_rate))
+                        .updater(new RmsProp(dis_learning_rate, 1e-8, 1e-8))
                         .nIn(64)
                         .nOut(128)
                         .build(), "dis_maxpool_layer_3")
@@ -110,12 +119,12 @@ public class dl4jGAN {
                         .stride(1, 1)
                         .build(), "dis_conv2d_layer_4")
                 .addLayer("dis_dense_layer_6", new DenseLayer.Builder()
-                        .updater(new Sgd(dis_learning_rate))
+                        .updater(new RmsProp(dis_learning_rate, 1e-8, 1e-8))
                         .nOut(1024)
                         .build(), "dis_maxpool_layer_5")
                 .addLayer("dis_output_layer_7", new OutputLayer.Builder(LossFunctions.LossFunction.MCXENT)
-                        .updater(new Sgd(dis_learning_rate))
-                        .nOut(numClasses)
+                        .updater(new RmsProp(dis_learning_rate, 1e-8, 1e-8))
+                        .nOut(2)
                         .activation(Activation.SOFTMAX)
                         .build(), "dis_dense_layer_6")
                 .setOutputs("dis_output_layer_7")
@@ -126,6 +135,9 @@ public class dl4jGAN {
         // Frozen generator.
         ComputationGraph gen = new ComputationGraph(new NeuralNetConfiguration.Builder()
                 .seed(666)
+                .optimizationAlgo(OptimizationAlgorithm.STOCHASTIC_GRADIENT_DESCENT)
+                .gradientNormalization(GradientNormalization.ClipElementWiseAbsoluteValue)
+                .gradientNormalizationThreshold(1.0)
                 .activation(Activation.TANH)
                 .weightInit(WeightInit.XAVIER)
                 .l2(frozen_learning_rate * 0.005)
@@ -133,25 +145,25 @@ public class dl4jGAN {
                 .addInputs("gen_input_layer_0")
                 .setInputTypes(InputType.feedForward(zSize))
                 .addLayer("gen_batch_1", new BatchNormalization.Builder()
-                        .updater(new Sgd(frozen_learning_rate))
+                        .updater(new RmsProp(frozen_learning_rate, 1e-8, 1e-8))
                         .build(), "gen_input_layer_0")
                 .addLayer("gen_dense_layer_2", new DenseLayer.Builder()
-                        .updater(new Sgd(frozen_learning_rate))
+                        .updater(new RmsProp(frozen_learning_rate, 1e-8, 1e-8))
                         .nOut(1024)
                         .build(), "gen_batch_1")
                 .addLayer("gen_dense_layer_3", new DenseLayer.Builder()
-                        .updater(new Sgd(frozen_learning_rate))
+                        .updater(new RmsProp(frozen_learning_rate, 1e-8, 1e-8))
                         .nOut(7 * 7 * 128)
                         .build(), "gen_dense_layer_2")
                 .addLayer("gen_batch_4", new BatchNormalization.Builder()
-                        .updater(new Sgd(frozen_learning_rate))
+                        .updater(new RmsProp(frozen_learning_rate, 1e-8, 1e-8))
                         .build(), "gen_dense_layer_3")
                 .inputPreProcessor("gen_deconv2d_5", new FeedForwardToCnnPreProcessor(7, 7, 128))
                 .addLayer("gen_deconv2d_5", new Upsampling2D.Builder(2)
                         .build(), "gen_batch_4")
                 .addLayer("gen_conv2d_6", new ConvolutionLayer.Builder(5, 5)
                         .stride(1, 1)
-                        .updater(new Sgd(frozen_learning_rate))
+                        .updater(new RmsProp(frozen_learning_rate, 1e-8, 1e-8))
                         .nIn(128)
                         .nOut(64)
                         .build(), "gen_deconv2d_5")
@@ -159,12 +171,12 @@ public class dl4jGAN {
                         .build(), "gen_conv2d_6")
                 .addLayer("gen_conv2d_8", new ConvolutionLayer.Builder(5, 5)
                         .stride(1, 1)
-                        .updater(new Sgd(frozen_learning_rate))
+                        .updater(new RmsProp(frozen_learning_rate, 1e-8, 1e-8))
                         .nIn(64)
                         .nOut(1)
                         .build(), "gen_deconv2d_7")
                 .addLayer("gen_output_layer_9", new DenseLayer.Builder()
-                        .updater(new Sgd(frozen_learning_rate))
+                        .updater(new RmsProp(frozen_learning_rate, 1e-8, 1e-8))
                         .activation(Activation.SIGMOID)
                         .nOut(28 * 28)
                         .build(), "gen_conv2d_8")
@@ -176,6 +188,9 @@ public class dl4jGAN {
         // GAN with unfrozen generator and frozen discriminator.
         ComputationGraph gan = new ComputationGraph(new NeuralNetConfiguration.Builder()
                 .seed(666)
+                .optimizationAlgo(OptimizationAlgorithm.STOCHASTIC_GRADIENT_DESCENT)
+                .gradientNormalization(GradientNormalization.ClipElementWiseAbsoluteValue)
+                .gradientNormalizationThreshold(1.0)
                 .activation(Activation.TANH)
                 .weightInit(WeightInit.XAVIER)
                 .l2(gen_learning_rate * 0.005)
@@ -183,25 +198,25 @@ public class dl4jGAN {
                 .addInputs("gan_input_layer_0")
                 .setInputTypes(InputType.feedForward(zSize))
                 .addLayer("gan_batch_1", new BatchNormalization.Builder()
-                        .updater(new Sgd(gen_learning_rate))
+                        .updater(new RmsProp(gen_learning_rate, 1e-8, 1e-8))
                         .build(), "gan_input_layer_0")
                 .addLayer("gan_dense_layer_2", new DenseLayer.Builder()
-                        .updater(new Sgd(gen_learning_rate))
+                        .updater(new RmsProp(gen_learning_rate, 1e-8, 1e-8))
                         .nOut(1024)
                         .build(), "gan_batch_1")
                 .addLayer("gan_dense_layer_3", new DenseLayer.Builder()
-                        .updater(new Sgd(gen_learning_rate))
+                        .updater(new RmsProp(gen_learning_rate, 1e-8, 1e-8))
                         .nOut(7 * 7 * 128)
                         .build(), "gan_dense_layer_2")
                 .addLayer("gan_batch_4", new BatchNormalization.Builder()
-                        .updater(new Sgd(gen_learning_rate))
+                        .updater(new RmsProp(gen_learning_rate, 1e-8, 1e-8))
                         .build(), "gan_dense_layer_3")
                 .inputPreProcessor("gan_deconv2d_5", new FeedForwardToCnnPreProcessor(7, 7, 128))
                 .addLayer("gan_deconv2d_5", new Upsampling2D.Builder(2)
                         .build(), "gan_batch_4")
                 .addLayer("gan_conv2d_6", new ConvolutionLayer.Builder(5, 5)
                         .stride(1, 1)
-                        .updater(new Sgd(gen_learning_rate))
+                        .updater(new RmsProp(gen_learning_rate, 1e-8, 1e-8))
                         .nIn(128)
                         .nOut(64)
                         .build(), "gan_deconv2d_5")
@@ -209,23 +224,23 @@ public class dl4jGAN {
                         .build(), "gan_conv2d_6")
                 .addLayer("gan_conv2d_8", new ConvolutionLayer.Builder(5, 5)
                         .stride(1, 1)
-                        .updater(new Sgd(gen_learning_rate))
+                        .updater(new RmsProp(gen_learning_rate, 1e-8, 1e-8))
                         .nIn(64)
                         .nOut(1)
                         .build(), "gan_deconv2d_7")
                 .addLayer("gan_dense_layer_9", new DenseLayer.Builder()
-                        .updater(new Sgd(gen_learning_rate))
+                        .updater(new RmsProp(gen_learning_rate, 1e-8, 1e-8))
                         .activation(Activation.SIGMOID)
                         .nOut(28 * 28)
                         .build(), "gan_conv2d_8")
 
                 .addLayer("gan_dis_batch_layer_10", new BatchNormalization.Builder()
-                        .updater(new Sgd(frozen_learning_rate))
+                        .updater(new RmsProp(frozen_learning_rate, 1e-8, 1e-8))
                         .build(), "gan_dense_layer_9")
                 .inputPreProcessor("gan_dis_conv2d_layer_11", new FeedForwardToCnnPreProcessor(28, 28, 1))
                 .addLayer("gan_dis_conv2d_layer_11", new ConvolutionLayer.Builder(5, 5)
                         .stride(2, 2)
-                        .updater(new Sgd(frozen_learning_rate))
+                        .updater(new RmsProp(frozen_learning_rate, 1e-8, 1e-8))
                         .nIn(1)
                         .nOut(64)
                         .build(), "gan_dis_batch_layer_10")
@@ -235,7 +250,7 @@ public class dl4jGAN {
                         .build(), "gan_dis_conv2d_layer_11")
                 .addLayer("gan_dis_conv2d_layer_13", new ConvolutionLayer.Builder(5, 5)
                         .stride(2, 2)
-                        .updater(new Sgd(frozen_learning_rate))
+                        .updater(new RmsProp(frozen_learning_rate, 1e-8, 1e-8))
                         .nIn(64)
                         .nOut(128)
                         .build(), "gan_dis_maxpool_layer_12")
@@ -244,12 +259,12 @@ public class dl4jGAN {
                         .stride(1, 1)
                         .build(), "gan_dis_conv2d_layer_13")
                 .addLayer("gan_dis_dense_layer_15", new DenseLayer.Builder()
-                        .updater(new Sgd(frozen_learning_rate))
+                        .updater(new RmsProp(frozen_learning_rate, 1e-8, 1e-8))
                         .nOut(1024)
                         .build(), "gan_dis_maxpool_layer_14")
                 .addLayer("gan_dis_output_layer_16", new OutputLayer.Builder(LossFunctions.LossFunction.MCXENT)
-                        .updater(new Sgd(frozen_learning_rate))
-                        .nOut(numClasses)
+                        .updater(new RmsProp(frozen_learning_rate, 1e-8, 1e-8))
+                        .nOut(2)
                         .activation(Activation.SOFTMAX)
                         .build(), "gan_dis_dense_layer_15")
                 .setOutputs("gan_dis_output_layer_16")
@@ -263,10 +278,10 @@ public class dl4jGAN {
         JavaSparkContext sc = new JavaSparkContext(sparkConf);
 
         TrainingMaster tm = new ParameterAveragingTrainingMaster.Builder(batchSizePerWorker)
-                .averagingFrequency(25)
+                .averagingFrequency(1)
                 .rngSeed(666)
                 .storageLevel(StorageLevel.DISK_ONLY())
-                .workerPrefetchNumBatches(10)
+                .workerPrefetchNumBatches(0)
                 .batchSizePerWorker(batchSizePerWorker)
                 .build();
 
@@ -286,7 +301,7 @@ public class dl4jGAN {
             trainDataList.clear();
             // This is real data...
             // [Fake, Real].
-            trainDataList.add(iterTrain.next());
+            trainDataList.add(new DataSet(iterTrain.next().getFeatureMatrix(), Nd4j.hstack(Nd4j.zeros(batchSizePerWorker, 1), Nd4j.ones(batchSizePerWorker, 1))));
 
             // ...and this is fake data.
             // [Fake, Real].
@@ -357,17 +372,37 @@ public class dl4jGAN {
             }
         }
 
+        INDArray out = gen.output(Nd4j.randn(36, 2))[0];
+        Nd4j.writeNumpy(out, resPath + "out.csv", delimiter);
+
         RecordReader recordReaderTest = new CSVRecordReader(numLinesToSkip, delimiter);
         recordReaderTest.initialize(new FileSplit(new ClassPathResource("mnist_test.csv").getFile()));
 
         DataSetIterator iterTest = new RecordReaderDataSetIterator(recordReaderTest, batchSizePred, labelIndex, numClasses);
 
-        List<DataSet> testDataList = new ArrayList<>();
-        while (iterTest.hasNext()) {
-            testDataList.add(iterTest.next());
-        }
+        FineTuneConfiguration fineTuneConf = new FineTuneConfiguration.Builder()
+                .optimizationAlgo(OptimizationAlgorithm.STOCHASTIC_GRADIENT_DESCENT)
+                .updater(new RmsProp(dis_learning_rate, 1e-8, 1e-8))
+                .seed(666)
+                .build();
 
-        log.info("Number of testing examples: {}!", testDataList.size());
+        ComputationGraph featureExtractor = new TransferLearning.GraphBuilder(dis)
+                .fineTuneConfiguration(fineTuneConf)
+                .setFeatureExtractor("dis_dense_layer_6")
+                .removeVertexKeepConnections("dis_output_layer_7")
+                .addLayer("dis_output_layer_7", new OutputLayer.Builder(LossFunctions.LossFunction.MCXENT)
+                        .nIn(1024)
+                        .nOut(numClasses)
+                        .weightInit(WeightInit.XAVIER)
+                        .activation(Activation.SOFTMAX)
+                        .build(), "dis_dense_layer_6")
+                .build();
+
+        Collection<INDArray> outFeat = new ArrayList<>();
+        while (iterTest.hasNext()) {
+            outFeat.add(featureExtractor.output(iterTest.next().getFeatureMatrix())[0]);
+        }
+        Nd4j.writeNumpy(Nd4j.vstack(outFeat), resPath + "out_feat.csv", delimiter);
 
         tm.deleteTempFiles(sc);
     }
