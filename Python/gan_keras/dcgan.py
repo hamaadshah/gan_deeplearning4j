@@ -195,31 +195,6 @@ class DeepConvGenAdvNet(BaseEstimator,
         
         return [self.d_test_loss, self.gan_test_loss]
     
-class DeeperConvGenAdvNet(DeepConvGenAdvNet):
-    def __init__(self,
-                 z_size=None,
-                 iterations=None,
-                 batch_size=None):
-        super(DeeperConvGenAdvNet, self).__init__(z_size=z_size,
-                                                  iterations=iterations,
-                                                  batch_size=batch_size)
-        
-    def build_discriminator(self):
-        image = Input(shape=(28, 28, 1))
-
-        cnn = Conv2D(filters=100, kernel_size=(8, 8), padding="same", strides=(1, 1), activation="elu")(image)
-        cnn = Dropout(rate=0.5)(cnn)
-        cnn = Conv2D(filters=100, kernel_size=(8, 8), padding="same", strides=(1, 1), activation="elu")(cnn)
-        cnn = Dropout(rate=0.5)(cnn)
-        cnn = Conv2D(filters=100, kernel_size=(8, 8), padding="same", strides=(1, 1), activation="elu")(cnn)
-        cnn = layers.MaxPooling2D(pool_size=(4, 4))(cnn)
-        cnn = Flatten()(cnn)
-        self.feature_extractor = Model(image, cnn)
-
-        is_real_img = Dense(units=1, activation="sigmoid", name="discriminator")(cnn)     
-        
-        return Model(image, is_real_img)
-    
 class DeepConvGenAdvNetInsurance(DeepConvGenAdvNet):
     def __init__(self,
                  z_size=None,
