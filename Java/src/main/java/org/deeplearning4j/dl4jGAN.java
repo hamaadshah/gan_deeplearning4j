@@ -6,7 +6,6 @@ import org.apache.spark.SparkConf;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
 
-import org.apache.spark.storage.StorageLevel;
 import org.datavec.api.records.reader.RecordReader;
 import org.datavec.api.records.reader.impl.csv.CSVRecordReader;
 import org.datavec.api.split.FileSplit;
@@ -15,6 +14,7 @@ import org.datavec.api.util.ClassPathResource;
 import org.deeplearning4j.datasets.datavec.RecordReaderDataSetIterator;
 import org.deeplearning4j.nn.api.*;
 import org.deeplearning4j.nn.conf.GradientNormalization;
+import org.deeplearning4j.nn.conf.WorkspaceMode;
 import org.deeplearning4j.nn.conf.inputs.InputType;
 import org.deeplearning4j.nn.conf.layers.*;
 import org.deeplearning4j.nn.conf.NeuralNetConfiguration;
@@ -50,13 +50,10 @@ public class dl4jGAN {
     private static final int labelIndex = 784;
     private static final int numClasses = 10;
     private static final int numClassesDis = 2;
-    private static final int numEpochs = 1;
+    private static final int numEpochs = 5;
     private static final int numFeatures = 784;
     private static final int numGenSamples = 10; // This will be a grid so effectively we get {numGenSamples * numGenSamples} samples.
-//    private static final int numIterations = 100000;
     private static final int numLinesToSkip = 0;
-//    private static final int printEvery = 10000;
-
     private static final int numberOfTheBeast = 666;
     private static final int zSize = 2;
 
@@ -67,7 +64,7 @@ public class dl4jGAN {
     private static final String delimiter = ",";
     private static final String resPath = "/Users/samson/Projects/gan_deeplearning4j/Java/src/main/resources/";
 
-    private static final boolean useGpu = true;
+    private static final boolean useGpu = false;
 
     public static void main(String[] args) throws Exception {
         new dl4jGAN().GAN(args);
@@ -79,6 +76,7 @@ public class dl4jGAN {
         }
 
         if (useGpu) {
+            System.out.println("Setting up CUDA environment!");
             Nd4j.setDataType(DataBuffer.Type.FLOAT);
 
             CudaEnvironment.getInstance().getConfiguration()
@@ -88,11 +86,13 @@ public class dl4jGAN {
                     .setVerbose(true);
         }
 
-        Nd4j.getMemoryManager().togglePeriodicGc(true);
+        Nd4j.getMemoryManager().setAutoGcWindow(5000);
         System.out.println(Nd4j.getBackend());
 
-        // Unfrozen discriminator.
+        log.info("Unfrozen discriminator!");
         ComputationGraph dis = new ComputationGraph(new NeuralNetConfiguration.Builder()
+                .trainingWorkspaceMode(WorkspaceMode.ENABLED)
+                .inferenceWorkspaceMode(WorkspaceMode.ENABLED)
                 .seed(numberOfTheBeast)
                 .optimizationAlgo(OptimizationAlgorithm.STOCHASTIC_GRADIENT_DESCENT)
                 .gradientNormalization(GradientNormalization.ClipElementWiseAbsoluteValue)
@@ -144,8 +144,10 @@ public class dl4jGAN {
         System.out.println(Arrays.toString(dis.output(Nd4j.randn(numGenSamples, numFeatures))[0].shape()));
         assert dis.output(Nd4j.randn(numGenSamples, numFeatures))[0].shape() == new int[]{numGenSamples, numClassesDis};
 
-        // Frozen generator.
+        log.info("Frozen generator!");
         ComputationGraph gen = new ComputationGraph(new NeuralNetConfiguration.Builder()
+                .trainingWorkspaceMode(WorkspaceMode.ENABLED)
+                .inferenceWorkspaceMode(WorkspaceMode.ENABLED)
                 .seed(numberOfTheBeast)
                 .optimizationAlgo(OptimizationAlgorithm.STOCHASTIC_GRADIENT_DESCENT)
                 .gradientNormalization(GradientNormalization.ClipElementWiseAbsoluteValue)
@@ -198,8 +200,10 @@ public class dl4jGAN {
         System.out.println(Arrays.toString(gen.output(Nd4j.randn(numGenSamples, zSize))[0].shape()));
         assert gen.output(Nd4j.randn(numGenSamples, numFeatures))[0].shape() == new int[]{numGenSamples, imageChannels, imageHeight, imageWidth};
 
-        // GAN with unfrozen generator and frozen discriminator.
+        log.info("GAN with unfrozen generator and frozen discriminator!");
         ComputationGraph gan = new ComputationGraph(new NeuralNetConfiguration.Builder()
+                .trainingWorkspaceMode(WorkspaceMode.ENABLED)
+                .inferenceWorkspaceMode(WorkspaceMode.ENABLED)
                 .seed(numberOfTheBeast)
                 .optimizationAlgo(OptimizationAlgorithm.STOCHASTIC_GRADIENT_DESCENT)
                 .gradientNormalization(GradientNormalization.ClipElementWiseAbsoluteValue)
@@ -285,19 +289,18 @@ public class dl4jGAN {
         System.out.println(Arrays.toString(gan.output(Nd4j.randn(numGenSamples, zSize))[0].shape()));
         assert gan.output(Nd4j.randn(numGenSamples, numFeatures))[0].shape() == new int[]{numGenSamples, 2};
 
+        log.info("Setting up Spark configuration!");
         SparkConf sparkConf = new SparkConf();
-        sparkConf.setMaster("local[4]");
+        sparkConf.setMaster("local[*]");
         sparkConf.setAppName("Deeplearning4j on Apache Spark: Generative Adversarial Network!");
-        sparkConf.set("spark.yarn.executor.memory", "16G");
-        sparkConf.set("spark.yarn.executor.memoryOverhead", "8000");
         sparkConf.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer");
         sparkConf.set("spark.kryo.registrator", "org.nd4j.Nd4jRegistrator");
         JavaSparkContext sc = new JavaSparkContext(sparkConf);
 
+        log.info("Setting up Synchronous Parameter Averaging!");
         TrainingMaster tm = new ParameterAveragingTrainingMaster.Builder(batchSizePerWorker)
-                .averagingFrequency(batchSizePerWorker)
+                .averagingFrequency(10)
                 .rngSeed(numberOfTheBeast)
-                .storageLevel(StorageLevel.DISK_ONLY())
                 .workerPrefetchNumBatches(0)
                 .batchSizePerWorker(batchSizePerWorker)
                 .build();
@@ -314,11 +317,23 @@ public class dl4jGAN {
 
         JavaRDD<DataSet> trainDataDis, trainDataGen;
 
-        INDArray soften_labels_fake, soften_labels_real;
+        INDArray soften_labels_fake, soften_labels_real, labels_fake, labels_real;
+        soften_labels_fake = Nd4j.randn(batchSizePerWorker, 1).muli(0.05);
+        soften_labels_real = Nd4j.randn(batchSizePerWorker, 1).muli(0.05);
+        labels_fake = Nd4j.hstack(Nd4j.ones(batchSizePerWorker, 1).addi(soften_labels_fake), Nd4j.zeros(batchSizePerWorker, 1).addi(soften_labels_real));
+        labels_real = Nd4j.hstack(Nd4j.zeros(batchSizePerWorker, 1).addi(soften_labels_fake), Nd4j.ones(batchSizePerWorker, 1).addi(soften_labels_real));
+
+        while (iterTrain.hasNext()) {
+            // Tell the frozen discriminator that all the fake examples are real examples.
+            // [Fake, Real].
+            trainDataListGen.add(new DataSet(Nd4j.rand(batchSizePerWorker, zSize).muli(2.0).subi(1.0), Nd4j.hstack(Nd4j.zeros(batchSizePerWorker, 1), Nd4j.ones(batchSizePerWorker, 1))));
+            iterTrain.next();
+        }
 
         INDArray grid_x = Nd4j.linspace(-1.0, 1.0, numGenSamples);
         INDArray grid_y = Nd4j.linspace(-1.0, 1.0, numGenSamples);
         Collection<INDArray> z = new ArrayList<>();
+        log.info("Creating some noise!");
         for (int i = 0; i < numGenSamples; i++) {
             for (int j = 0; j < numGenSamples; j++) {
                 z.add(Nd4j.create(new double[]{grid_x.getDouble(0, i), grid_y.getDouble(0, j)}));
@@ -327,116 +342,23 @@ public class dl4jGAN {
 
         INDArray out;
 
-        /*
-        int batch_counter = 0;
-
-        while (iterTrain.hasNext() && batch_counter < numIterations) {
-            trainDataList.clear();
-            // This is real data...
-            // [Fake, Real].
-            soften_labels_fake = Nd4j.randn(batchSizePerWorker, 1).muli(0.05);
-            soften_labels_real = Nd4j.randn(batchSizePerWorker, 1).muli(0.05);
-            trainDataList.add(new DataSet(iterTrain.next().getFeatureMatrix(), Nd4j.hstack(Nd4j.zeros(batchSizePerWorker, 1).addi(soften_labels_fake), Nd4j.ones(batchSizePerWorker, 1).addi(soften_labels_real))));
-
-            // ...and this is fake data.
-            // [Fake, Real].
-            soften_labels_fake = Nd4j.randn(batchSizePerWorker, 1).muli(0.05);
-            soften_labels_real = Nd4j.randn(batchSizePerWorker, 1).muli(0.05);
-            trainDataList.add(new DataSet(gen.output(Nd4j.rand(batchSizePerWorker, zSize).muli(2.0).subi(1.0))[0], Nd4j.hstack(Nd4j.ones(batchSizePerWorker, 1).addi(soften_labels_fake), Nd4j.zeros(batchSizePerWorker, 1).addi(soften_labels_real))));
-
-            log.info("Training discriminator!");
-            trainDataDis = sc.parallelize(trainDataList).persist(StorageLevel.DISK_ONLY());
-            sparkDis.fit(trainDataDis);
-
-            // Update GAN's frozen discriminator with unfrozen discriminator.
-            gan.getLayer("gan_dis_batch_layer_9").setParam("gamma", dis.getLayer("dis_batch_layer_1").getParam("gamma"));
-            gan.getLayer("gan_dis_batch_layer_9").setParam("beta", dis.getLayer("dis_batch_layer_1").getParam("beta"));
-            gan.getLayer("gan_dis_batch_layer_9").setParam("mean", dis.getLayer("dis_batch_layer_1").getParam("mean"));
-            gan.getLayer("gan_dis_batch_layer_9").setParam("var", dis.getLayer("dis_batch_layer_1").getParam("var"));
-
-            gan.getLayer("gan_dis_conv2d_layer_10").setParam("W", dis.getLayer("dis_conv2d_layer_2").getParam("W"));
-            gan.getLayer("gan_dis_conv2d_layer_10").setParam("b", dis.getLayer("dis_conv2d_layer_2").getParam("b"));
-
-            gan.getLayer("gan_dis_conv2d_layer_12").setParam("W", dis.getLayer("dis_conv2d_layer_4").getParam("W"));
-            gan.getLayer("gan_dis_conv2d_layer_12").setParam("b", dis.getLayer("dis_conv2d_layer_4").getParam("b"));
-
-            gan.getLayer("gan_dis_dense_layer_14").setParam("W", dis.getLayer("dis_dense_layer_6").getParam("W"));
-            gan.getLayer("gan_dis_dense_layer_14").setParam("b", dis.getLayer("dis_dense_layer_6").getParam("b"));
-
-            gan.getLayer("gan_dis_output_layer_15").setParam("W", dis.getLayer("dis_output_layer_7").getParam("W"));
-            gan.getLayer("gan_dis_output_layer_15").setParam("b", dis.getLayer("dis_output_layer_7").getParam("b"));
-
-            trainDataList.clear();
-            // Tell the frozen discriminator that all the fake examples are real examples.
-            // [Fake, Real].
-            trainDataList.add(new DataSet(Nd4j.rand(batchSizePerWorker, zSize).muli(2.0).subi(1.0), Nd4j.hstack(Nd4j.zeros(batchSizePerWorker, 1), Nd4j.ones(batchSizePerWorker, 1))));
-
-            log.info("Training generator!");
-            trainDataGen = sc.parallelize(trainDataList).persist(StorageLevel.DISK_ONLY());
-            sparkGan.fit(trainDataGen);
-
-            // Update frozen generator with GAN's unfrozen generator.
-            gen.getLayer("gen_batch_1").setParam("gamma", gan.getLayer("gan_batch_1").getParam("gamma"));
-            gen.getLayer("gen_batch_1").setParam("beta", gan.getLayer("gan_batch_1").getParam("beta"));
-            gen.getLayer("gen_batch_1").setParam("mean", gan.getLayer("gan_batch_1").getParam("mean"));
-            gen.getLayer("gen_batch_1").setParam("var", gan.getLayer("gan_batch_1").getParam("var"));
-
-            gen.getLayer("gen_dense_layer_2").setParam("W", gan.getLayer("gan_dense_layer_2").getParam("W"));
-            gen.getLayer("gen_dense_layer_2").setParam("b", gan.getLayer("gan_dense_layer_2").getParam("b"));
-
-            gen.getLayer("gen_dense_layer_3").setParam("W", gan.getLayer("gan_dense_layer_3").getParam("W"));
-            gen.getLayer("gen_dense_layer_3").setParam("b", gan.getLayer("gan_dense_layer_3").getParam("b"));
-
-            gen.getLayer("gen_batch_4").setParam("gamma", gan.getLayer("gan_batch_4").getParam("gamma"));
-            gen.getLayer("gen_batch_4").setParam("beta", gan.getLayer("gan_batch_4").getParam("beta"));
-            gen.getLayer("gen_batch_4").setParam("mean", gan.getLayer("gan_batch_4").getParam("mean"));
-            gen.getLayer("gen_batch_4").setParam("var", gan.getLayer("gan_batch_4").getParam("var"));
-
-            gen.getLayer("gen_conv2d_6").setParam("W", gan.getLayer("gan_conv2d_6").getParam("W"));
-            gen.getLayer("gen_conv2d_6").setParam("b", gan.getLayer("gan_conv2d_6").getParam("b"));
-
-            gen.getLayer("gen_conv2d_8").setParam("W", gan.getLayer("gan_conv2d_8").getParam("W"));
-            gen.getLayer("gen_conv2d_8").setParam("b", gan.getLayer("gan_conv2d_8").getParam("b"));
-
-            batch_counter += batchSizePerWorker;
-            log.info("Completed Batch {}!", batch_counter);
-
-            if ((batch_counter % printEvery) == 0) {
-                out = gen.output(Nd4j.vstack(z))[0].reshape(numGenSamples * numGenSamples, numFeatures);
-                Nd4j.writeNumpy(out, String.format("%sout_%d.csv", resPath, batch_counter), delimiter);
-            }
-
-            if (!iterTrain.hasNext() && batch_counter < numIterations) {
-                iterTrain.reset();
-                batch_counter = 0;
-            }
-        } */
-
         for (int epoch = 0; epoch < numEpochs; epoch++) {
             trainDataList.clear();
             trainDataListGen.clear();
 
             iterTrain.reset();
+            log.info("Setting up datasets!");
             while (iterTrain.hasNext()) {
                 // This is real data...
                 // [Fake, Real].
-                soften_labels_fake = Nd4j.randn(batchSizePerWorker, 1).muli(0.05);
-                soften_labels_real = Nd4j.randn(batchSizePerWorker, 1).muli(0.05);
-                trainDataList.add(new DataSet(iterTrain.next().getFeatureMatrix(), Nd4j.hstack(Nd4j.zeros(batchSizePerWorker, 1).addi(soften_labels_fake), Nd4j.ones(batchSizePerWorker, 1).addi(soften_labels_real))));
-
-                // ...and this is fake data.
-                // [Fake, Real].
-                soften_labels_fake = Nd4j.randn(batchSizePerWorker, 1).muli(0.05);
-                soften_labels_real = Nd4j.randn(batchSizePerWorker, 1).muli(0.05);
-                trainDataList.add(new DataSet(gen.output(Nd4j.rand(batchSizePerWorker, zSize).muli(2.0).subi(1.0))[0], Nd4j.hstack(Nd4j.ones(batchSizePerWorker, 1).addi(soften_labels_fake), Nd4j.zeros(batchSizePerWorker, 1).addi(soften_labels_real))));
-
-                // Tell the frozen discriminator that all the fake examples are real examples.
-                // [Fake, Real].
-                trainDataListGen.add(new DataSet(Nd4j.rand(batchSizePerWorker, zSize).muli(2.0).subi(1.0), Nd4j.hstack(Nd4j.zeros(batchSizePerWorker, 1), Nd4j.ones(batchSizePerWorker, 1))));
+                trainDataList.add(new DataSet(iterTrain.next().getFeatureMatrix(), labels_real));
             }
+            // ...and this is fake data.
+            // [Fake, Real].
+            trainDataList.add(new DataSet(gen.output(Nd4j.rand(batchSizePerWorker * trainDataList.size(), zSize).muli(2.0).subi(1.0))[0], labels_fake));
 
             log.info("Training discriminator!");
-            trainDataDis = sc.parallelize(trainDataList).persist(StorageLevel.DISK_ONLY());
+            trainDataDis = sc.parallelize(trainDataList);
             sparkDis.fit(trainDataDis);
 
             // Update GAN's frozen discriminator with unfrozen discriminator.
@@ -458,7 +380,7 @@ public class dl4jGAN {
             gan.getLayer("gan_dis_output_layer_15").setParam("b", dis.getLayer("dis_output_layer_7").getParam("b"));
 
             log.info("Training generator!");
-            trainDataGen = sc.parallelize(trainDataListGen).persist(StorageLevel.DISK_ONLY());
+            trainDataGen = sc.parallelize(trainDataListGen);
             sparkGan.fit(trainDataGen);
 
             // Update frozen generator with GAN's unfrozen generator.
@@ -486,10 +408,15 @@ public class dl4jGAN {
 
             out = gen.output(Nd4j.vstack(z))[0].reshape(numGenSamples * numGenSamples, numFeatures);
             Nd4j.writeNumpy(out, String.format("%sout_%d.csv", resPath, epoch + 1), delimiter);
+
+            log.info("Completed Epoch {}!", epoch + 1);
         }
 
+        log.info("Computer vision deep learning model with pre-trained layers from the GAN's discriminator!");
         ComputationGraph computerVision = new TransferLearning.GraphBuilder(dis)
                 .fineTuneConfiguration(new FineTuneConfiguration.Builder()
+                        .trainingWorkspaceMode(WorkspaceMode.ENABLED)
+                        .inferenceWorkspaceMode(WorkspaceMode.ENABLED)
                         .optimizationAlgo(OptimizationAlgorithm.STOCHASTIC_GRADIENT_DESCENT)
                         .updater(new RmsProp(dis_learning_rate, 1e-8, 1e-8))
                         .seed(numberOfTheBeast)
@@ -514,7 +441,7 @@ public class dl4jGAN {
         }
 
         JavaRDD<DataSet> trainData;
-        trainData = sc.parallelize(trainDataList).persist(StorageLevel.DISK_ONLY());
+        trainData = sc.parallelize(trainDataList);
 
         for (int epoch = 0; epoch < numEpochs; epoch++) {
             sparkCV.fit(trainData);
