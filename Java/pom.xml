@@ -9,7 +9,7 @@
     <version>1.0.0-beta</version>
     <properties>
         <!--nd4j-cuda-9.0-platform; nd4j-native-platform-->
-        <nd4j.backend>nd4j-cuda-9.0-platform</nd4j.backend>
+        <nd4j.backend>nd4j-native-platform</nd4j.backend>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <shadedClassifier>bin</shadedClassifier>
         <dl4j.version>1.0.0-beta</dl4j.version>
@@ -146,6 +146,11 @@
             <groupId>ch.qos.logback</groupId>
             <artifactId>logback-classic</artifactId>
             <version>${logback.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.nd4j</groupId>
+            <artifactId>nd4j-kryo_2.11</artifactId>
+            <version>${dl4j.version}</version>
         </dependency>
     </dependencies>
     <build>

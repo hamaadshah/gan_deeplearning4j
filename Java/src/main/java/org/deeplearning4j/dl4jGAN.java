@@ -46,26 +46,28 @@ public class dl4jGAN {
     private static final int batchSizePred = 50;
     private static final int imageHeight = 28;
     private static final int imageWidth = 28;
-    private static final int imageChannels = 1;    private static final int numIterations = 100000;
+    private static final int imageChannels = 1;
     private static final int labelIndex = 784;
     private static final int numClasses = 10;
-    private static final int numEpochs = 100;
+    private static final int numClassesDis = 2;
+    private static final int numEpochs = 1;
     private static final int numFeatures = 784;
-    private static final int numGenSamples = 50; // This will be a grid so effectively we get {numGenSamples * numGenSamples} samples.
+    private static final int numGenSamples = 10; // This will be a grid so effectively we get {numGenSamples * numGenSamples} samples.
+//    private static final int numIterations = 100000;
     private static final int numLinesToSkip = 0;
-    private static final int printEvery = 10000;
+//    private static final int printEvery = 10000;
 
     private static final int numberOfTheBeast = 666;
     private static final int zSize = 2;
 
-    private static final double dis_learning_rate = 0.01;
+    private static final double dis_learning_rate = 0.001;
     private static final double frozen_learning_rate = 0.0;
-    private static final double gen_learning_rate = 0.02;
+    private static final double gen_learning_rate = 0.01;
 
     private static final String delimiter = ",";
     private static final String resPath = "/Users/samson/Projects/gan_deeplearning4j/Java/src/main/resources/";
 
-    private static final boolean useGpu = false;
+    private static final boolean useGpu = true;
 
     public static void main(String[] args) throws Exception {
         new dl4jGAN().GAN(args);
@@ -130,7 +132,7 @@ public class dl4jGAN {
                         .build(), "dis_maxpool_layer_5")
                 .addLayer("dis_output_layer_7", new OutputLayer.Builder(LossFunctions.LossFunction.MCXENT)
                         .updater(new RmsProp(dis_learning_rate, 1e-8, 1e-8))
-                        .nOut(2)
+                        .nOut(numClassesDis)
                         .activation(Activation.SOFTMAX)
                         .build(), "dis_dense_layer_6")
                 .setOutputs("dis_output_layer_7")
@@ -140,7 +142,7 @@ public class dl4jGAN {
         dis.init();
         System.out.println(dis.summary());
         System.out.println(Arrays.toString(dis.output(Nd4j.randn(numGenSamples, numFeatures))[0].shape()));
-        assert dis.output(Nd4j.randn(numGenSamples, numFeatures))[0].shape() == new int[]{numGenSamples, 2};
+        assert dis.output(Nd4j.randn(numGenSamples, numFeatures))[0].shape() == new int[]{numGenSamples, numClassesDis};
 
         // Frozen generator.
         ComputationGraph gen = new ComputationGraph(new NeuralNetConfiguration.Builder()
@@ -271,7 +273,7 @@ public class dl4jGAN {
                         .build(), "gan_dis_maxpool_layer_13")
                 .addLayer("gan_dis_output_layer_15", new OutputLayer.Builder(LossFunctions.LossFunction.MCXENT)
                         .updater(new RmsProp(frozen_learning_rate, 1e-8, 1e-8))
-                        .nOut(2)
+                        .nOut(numClassesDis)
                         .activation(Activation.SOFTMAX)
                         .build(), "gan_dis_dense_layer_14")
                 .pretrain(false)
@@ -286,6 +288,10 @@ public class dl4jGAN {
         SparkConf sparkConf = new SparkConf();
         sparkConf.setMaster("local[4]");
         sparkConf.setAppName("Deeplearning4j on Apache Spark: Generative Adversarial Network!");
+        sparkConf.set("spark.yarn.executor.memory", "16G");
+        sparkConf.set("spark.yarn.executor.memoryOverhead", "8000");
+        sparkConf.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer");
+        sparkConf.set("spark.kryo.registrator", "org.nd4j.Nd4jRegistrator");
         JavaSparkContext sc = new JavaSparkContext(sparkConf);
 
         TrainingMaster tm = new ParameterAveragingTrainingMaster.Builder(batchSizePerWorker)
@@ -304,6 +310,7 @@ public class dl4jGAN {
 
         DataSetIterator iterTrain = new RecordReaderDataSetIterator(recordReaderTrain, batchSizePerWorker, labelIndex, numClasses);
         List<DataSet> trainDataList = new ArrayList<>();
+        List<DataSet> trainDataListGen = new ArrayList<>();
 
         JavaRDD<DataSet> trainDataDis, trainDataGen;
 
@@ -320,6 +327,7 @@ public class dl4jGAN {
 
         INDArray out;
 
+        /*
         int batch_counter = 0;
 
         while (iterTrain.hasNext() && batch_counter < numIterations) {
@@ -402,6 +410,82 @@ public class dl4jGAN {
                 iterTrain.reset();
                 batch_counter = 0;
             }
+        } */
+
+        for (int epoch = 0; epoch < numEpochs; epoch++) {
+            trainDataList.clear();
+            trainDataListGen.clear();
+
+            iterTrain.reset();
+            while (iterTrain.hasNext()) {
+                // This is real data...
+                // [Fake, Real].
+                soften_labels_fake = Nd4j.randn(batchSizePerWorker, 1).muli(0.05);
+                soften_labels_real = Nd4j.randn(batchSizePerWorker, 1).muli(0.05);
+                trainDataList.add(new DataSet(iterTrain.next().getFeatureMatrix(), Nd4j.hstack(Nd4j.zeros(batchSizePerWorker, 1).addi(soften_labels_fake), Nd4j.ones(batchSizePerWorker, 1).addi(soften_labels_real))));
+
+                // ...and this is fake data.
+                // [Fake, Real].
+                soften_labels_fake = Nd4j.randn(batchSizePerWorker, 1).muli(0.05);
+                soften_labels_real = Nd4j.randn(batchSizePerWorker, 1).muli(0.05);
+                trainDataList.add(new DataSet(gen.output(Nd4j.rand(batchSizePerWorker, zSize).muli(2.0).subi(1.0))[0], Nd4j.hstack(Nd4j.ones(batchSizePerWorker, 1).addi(soften_labels_fake), Nd4j.zeros(batchSizePerWorker, 1).addi(soften_labels_real))));
+
+                // Tell the frozen discriminator that all the fake examples are real examples.
+                // [Fake, Real].
+                trainDataListGen.add(new DataSet(Nd4j.rand(batchSizePerWorker, zSize).muli(2.0).subi(1.0), Nd4j.hstack(Nd4j.zeros(batchSizePerWorker, 1), Nd4j.ones(batchSizePerWorker, 1))));
+            }
+
+            log.info("Training discriminator!");
+            trainDataDis = sc.parallelize(trainDataList).persist(StorageLevel.DISK_ONLY());
+            sparkDis.fit(trainDataDis);
+
+            // Update GAN's frozen discriminator with unfrozen discriminator.
+            gan.getLayer("gan_dis_batch_layer_9").setParam("gamma", dis.getLayer("dis_batch_layer_1").getParam("gamma"));
+            gan.getLayer("gan_dis_batch_layer_9").setParam("beta", dis.getLayer("dis_batch_layer_1").getParam("beta"));
+            gan.getLayer("gan_dis_batch_layer_9").setParam("mean", dis.getLayer("dis_batch_layer_1").getParam("mean"));
+            gan.getLayer("gan_dis_batch_layer_9").setParam("var", dis.getLayer("dis_batch_layer_1").getParam("var"));
+
+            gan.getLayer("gan_dis_conv2d_layer_10").setParam("W", dis.getLayer("dis_conv2d_layer_2").getParam("W"));
+            gan.getLayer("gan_dis_conv2d_layer_10").setParam("b", dis.getLayer("dis_conv2d_layer_2").getParam("b"));
+
+            gan.getLayer("gan_dis_conv2d_layer_12").setParam("W", dis.getLayer("dis_conv2d_layer_4").getParam("W"));
+            gan.getLayer("gan_dis_conv2d_layer_12").setParam("b", dis.getLayer("dis_conv2d_layer_4").getParam("b"));
+
+            gan.getLayer("gan_dis_dense_layer_14").setParam("W", dis.getLayer("dis_dense_layer_6").getParam("W"));
+            gan.getLayer("gan_dis_dense_layer_14").setParam("b", dis.getLayer("dis_dense_layer_6").getParam("b"));
+
+            gan.getLayer("gan_dis_output_layer_15").setParam("W", dis.getLayer("dis_output_layer_7").getParam("W"));
+            gan.getLayer("gan_dis_output_layer_15").setParam("b", dis.getLayer("dis_output_layer_7").getParam("b"));
+
+            log.info("Training generator!");
+            trainDataGen = sc.parallelize(trainDataListGen).persist(StorageLevel.DISK_ONLY());
+            sparkGan.fit(trainDataGen);
+
+            // Update frozen generator with GAN's unfrozen generator.
+            gen.getLayer("gen_batch_1").setParam("gamma", gan.getLayer("gan_batch_1").getParam("gamma"));
+            gen.getLayer("gen_batch_1").setParam("beta", gan.getLayer("gan_batch_1").getParam("beta"));
+            gen.getLayer("gen_batch_1").setParam("mean", gan.getLayer("gan_batch_1").getParam("mean"));
+            gen.getLayer("gen_batch_1").setParam("var", gan.getLayer("gan_batch_1").getParam("var"));
+
+            gen.getLayer("gen_dense_layer_2").setParam("W", gan.getLayer("gan_dense_layer_2").getParam("W"));
+            gen.getLayer("gen_dense_layer_2").setParam("b", gan.getLayer("gan_dense_layer_2").getParam("b"));
+
+            gen.getLayer("gen_dense_layer_3").setParam("W", gan.getLayer("gan_dense_layer_3").getParam("W"));
+            gen.getLayer("gen_dense_layer_3").setParam("b", gan.getLayer("gan_dense_layer_3").getParam("b"));
+
+            gen.getLayer("gen_batch_4").setParam("gamma", gan.getLayer("gan_batch_4").getParam("gamma"));
+            gen.getLayer("gen_batch_4").setParam("beta", gan.getLayer("gan_batch_4").getParam("beta"));
+            gen.getLayer("gen_batch_4").setParam("mean", gan.getLayer("gan_batch_4").getParam("mean"));
+            gen.getLayer("gen_batch_4").setParam("var", gan.getLayer("gan_batch_4").getParam("var"));
+
+            gen.getLayer("gen_conv2d_6").setParam("W", gan.getLayer("gan_conv2d_6").getParam("W"));
+            gen.getLayer("gen_conv2d_6").setParam("b", gan.getLayer("gan_conv2d_6").getParam("b"));
+
+            gen.getLayer("gen_conv2d_8").setParam("W", gan.getLayer("gan_conv2d_8").getParam("W"));
+            gen.getLayer("gen_conv2d_8").setParam("b", gan.getLayer("gan_conv2d_8").getParam("b"));
+
+            out = gen.output(Nd4j.vstack(z))[0].reshape(numGenSamples * numGenSamples, numFeatures);
+            Nd4j.writeNumpy(out, String.format("%sout_%d.csv", resPath, epoch + 1), delimiter);
         }
 
         ComputationGraph computerVision = new TransferLearning.GraphBuilder(dis)
