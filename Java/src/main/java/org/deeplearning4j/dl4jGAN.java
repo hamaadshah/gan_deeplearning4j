@@ -1,5 +1,6 @@
 package org.deeplearning4j;
 
+import java.io.File;
 import java.util.*;
 
 import org.apache.spark.SparkConf;
@@ -26,6 +27,7 @@ import org.deeplearning4j.nn.weights.*;
 import org.deeplearning4j.spark.api.TrainingMaster;
 import org.deeplearning4j.spark.impl.graph.SparkComputationGraph;
 import org.deeplearning4j.spark.impl.paramavg.ParameterAveragingTrainingMaster;
+import org.deeplearning4j.util.ModelSerializer;
 
 import org.nd4j.jita.conf.CudaEnvironment;
 import org.nd4j.linalg.activations.*;
@@ -44,14 +46,13 @@ public class dl4jGAN {
     private static final Logger log = LoggerFactory.getLogger(dl4jGAN.class);
 
     private static final int batchSizePerWorker = 100;
-    private static final int batchSizePred = 50;
+    private static final int batchSizePred = 1000;
     private static final int imageHeight = 28;
     private static final int imageWidth = 28;
     private static final int imageChannels = 1;
     private static final int labelIndex = 784;
     private static final int numClasses = 10;
     private static final int numClassesDis = 1;
-    private static final int numEpochs = 50;
     private static final int numFeatures = 784;
     private static final int numIterations = 10000;
     private static final int numGenSamples = 10; // This will be a grid so effectively we get {numGenSamples * numGenSamples} samples.
@@ -60,9 +61,9 @@ public class dl4jGAN {
     private static final int printEvery = 100;
     private static final int zSize = 2;
 
-    private static final double dis_learning_rate = 0.0002;
+    private static final double dis_learning_rate = 0.025;
     private static final double frozen_learning_rate = 0.0;
-    private static final double gen_learning_rate = 0.0004;
+    private static final double gen_learning_rate = 0.05;
 
     private static final String delimiter = ",";
     private static final String resPath = "/Users/samson/Projects/gan_deeplearning4j/Java/src/main/resources/";
@@ -84,7 +85,7 @@ public class dl4jGAN {
 
             CudaEnvironment.getInstance().getConfiguration()
                     .allowMultiGPU(true)
-                    .setMaximumDeviceCache(8L * 1024L * 1024L * 1024L)
+                    .setMaximumDeviceCache(16L * 1024L * 1024L * 1024L)
                     .allowCrossDeviceAccess(true)
                     .setVerbose(true);
         }
@@ -145,7 +146,6 @@ public class dl4jGAN {
         dis.init();
         System.out.println(dis.summary());
         System.out.println(Arrays.toString(dis.output(Nd4j.randn(numGenSamples, numFeatures))[0].shape()));
-        assert dis.output(Nd4j.randn(numGenSamples, numFeatures))[0].shape() == new int[]{numGenSamples, numClassesDis};
 
         log.info("Frozen generator!");
         ComputationGraph gen = new ComputationGraph(new NeuralNetConfiguration.Builder()
@@ -201,7 +201,6 @@ public class dl4jGAN {
         gen.init();
         System.out.println(gen.summary());
         System.out.println(Arrays.toString(gen.output(Nd4j.randn(numGenSamples, zSize))[0].shape()));
-        assert gen.output(Nd4j.randn(numGenSamples, numFeatures))[0].shape() == new int[]{numGenSamples, imageChannels, imageHeight, imageWidth};
 
         log.info("GAN with unfrozen generator and frozen discriminator!");
         ComputationGraph gan = new ComputationGraph(new NeuralNetConfiguration.Builder()
@@ -290,11 +289,10 @@ public class dl4jGAN {
         gan.init();
         System.out.println(gan.summary());
         System.out.println(Arrays.toString(gan.output(Nd4j.randn(numGenSamples, zSize))[0].shape()));
-        assert gan.output(Nd4j.randn(numGenSamples, numFeatures))[0].shape() == new int[]{numGenSamples, 2};
 
         log.info("Setting up Spark configuration!");
         SparkConf sparkConf = new SparkConf();
-        sparkConf.setMaster("local[4]");
+        sparkConf.setMaster("local[2]");
         sparkConf.setAppName("Deeplearning4j on Apache Spark: Generative Adversarial Network!");
         sparkConf.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer");
         sparkConf.set("spark.kryo.registrator", "org.nd4j.Nd4jRegistrator");
@@ -311,13 +309,37 @@ public class dl4jGAN {
         SparkComputationGraph sparkDis = new SparkComputationGraph(sc, dis, tm);
         SparkComputationGraph sparkGan = new SparkComputationGraph(sc, gan, tm);
 
+        log.info("Computer vision deep learning model with pre-trained layers from the GAN's discriminator!");
+        ComputationGraph computerVision = new TransferLearning.GraphBuilder(sparkDis.getNetwork())
+                .fineTuneConfiguration(new FineTuneConfiguration.Builder()
+                        .trainingWorkspaceMode(WorkspaceMode.ENABLED)
+                        .inferenceWorkspaceMode(WorkspaceMode.ENABLED)
+                        .optimizationAlgo(OptimizationAlgorithm.STOCHASTIC_GRADIENT_DESCENT)
+                        .updater(new RmsProp(dis_learning_rate, 1e-8, 1e-8))
+                        .seed(numberOfTheBeast)
+                        .build())
+                .setFeatureExtractor("dis_dense_layer_6")
+                .removeVertexKeepConnections("dis_output_layer_7")
+                .addLayer("dis_output_layer_7", new OutputLayer.Builder(LossFunctions.LossFunction.MCXENT)
+                        .updater(new RmsProp(dis_learning_rate, 1e-8, 1e-8))
+                        .nIn(1024)
+                        .nOut(numClasses)
+                        .weightInit(WeightInit.XAVIER)
+                        .activation(Activation.SOFTMAX)
+                        .build(), "dis_dense_layer_6")
+                .build();
+        System.out.println(computerVision.summary());
+        System.out.println(Arrays.toString(computerVision.output(Nd4j.randn(numGenSamples, numFeatures))[0].shape()));
+
+        SparkComputationGraph sparkCV = new SparkComputationGraph(sc, computerVision, tm);
+
         RecordReader recordReaderTrain = new CSVRecordReader(numLinesToSkip, delimiter);
         recordReaderTrain.initialize(new FileSplit(new ClassPathResource("mnist_train.csv").getFile()));
 
         DataSetIterator iterTrain = new RecordReaderDataSetIterator(recordReaderTrain, batchSizePerWorker, labelIndex, numClasses);
         List<DataSet> trainDataList = new ArrayList<>();
 
-        JavaRDD<DataSet> trainDataDis, trainDataGen;
+        JavaRDD<DataSet> trainDataDis, trainDataGen, trainData;
 
         INDArray grid = Nd4j.linspace(-1.0, 1.0, numGenSamples);
         Collection<INDArray> z = new ArrayList<>();
@@ -332,16 +354,21 @@ public class dl4jGAN {
 
         int batch_counter = 0;
 
+        DataSet trDataSet;
+
         while (iterTrain.hasNext() && batch_counter < numIterations) {
             trainDataList.clear();
+            trDataSet = iterTrain.next();
+
             // This is real data...
             // [Fake, Real].
-            trainDataList.add(new DataSet(iterTrain.next().getFeatureMatrix(), Nd4j.ones(batchSizePerWorker, 1)));
+            trainDataList.add(new DataSet(trDataSet.getFeatureMatrix(), Nd4j.ones(batchSizePerWorker, 1)));
 
             // ...and this is fake data.
             // [Fake, Real].
             trainDataList.add(new DataSet(gen.output(Nd4j.rand(batchSizePerWorker, zSize).muli(2.0).subi(1.0))[0], Nd4j.zeros(batchSizePerWorker, 1)));
 
+            // Unfrozen discriminator is trying to figure itself out given a frozen generator.
             log.info("Training discriminator!");
             trainDataDis = sc.parallelize(trainDataList).persist(StorageLevel.DISK_ONLY());
             sparkDis.fit(trainDataDis);
@@ -369,6 +396,7 @@ public class dl4jGAN {
             // [Fake, Real].
             trainDataList.add(new DataSet(Nd4j.rand(batchSizePerWorker, zSize).muli(2.0).subi(1.0), Nd4j.ones(batchSizePerWorker, 1)));
 
+            // Unfrozen generator is trying to fool the frozen discriminator.
             log.info("Training generator!");
             trainDataGen = sc.parallelize(trainDataList).persist(StorageLevel.DISK_ONLY());
             sparkGan.fit(trainDataGen);
@@ -396,6 +424,27 @@ public class dl4jGAN {
             gen.getLayer("gen_conv2d_8").setParam("W", sparkGan.getNetwork().getLayer("gan_conv2d_8").getParam("W"));
             gen.getLayer("gen_conv2d_8").setParam("b", sparkGan.getNetwork().getLayer("gan_conv2d_8").getParam("b"));
 
+            trainDataList.clear();
+            trainDataList.add(trDataSet);
+
+            log.info("Training computer vision model!");
+            sparkCV.getNetwork().getLayer("dis_batch_layer_1").setParam("gamma", sparkDis.getNetwork().getLayer("dis_batch_layer_1").getParam("gamma"));
+            sparkCV.getNetwork().getLayer("dis_batch_layer_1").setParam("beta", sparkDis.getNetwork().getLayer("dis_batch_layer_1").getParam("beta"));
+            sparkCV.getNetwork().getLayer("dis_batch_layer_1").setParam("mean", sparkDis.getNetwork().getLayer("dis_batch_layer_1").getParam("mean"));
+            sparkCV.getNetwork().getLayer("dis_batch_layer_1").setParam("var", sparkDis.getNetwork().getLayer("dis_batch_layer_1").getParam("var"));
+
+            sparkCV.getNetwork().getLayer("dis_conv2d_layer_2").setParam("W", sparkDis.getNetwork().getLayer("dis_conv2d_layer_2").getParam("W"));
+            sparkCV.getNetwork().getLayer("dis_conv2d_layer_2").setParam("b", sparkDis.getNetwork().getLayer("dis_conv2d_layer_2").getParam("b"));
+
+            sparkCV.getNetwork().getLayer("dis_conv2d_layer_4").setParam("W", sparkDis.getNetwork().getLayer("dis_conv2d_layer_4").getParam("W"));
+            sparkCV.getNetwork().getLayer("dis_conv2d_layer_4").setParam("b", sparkDis.getNetwork().getLayer("dis_conv2d_layer_4").getParam("b"));
+
+            sparkCV.getNetwork().getLayer("dis_dense_layer_6").setParam("W", sparkDis.getNetwork().getLayer("dis_dense_layer_6").getParam("W"));
+            sparkCV.getNetwork().getLayer("dis_dense_layer_6").setParam("b", sparkDis.getNetwork().getLayer("dis_dense_layer_6").getParam("b"));
+
+            trainData = sc.parallelize(trainDataList);
+            sparkCV.fit(trainData);
+
             batch_counter++;
             log.info("Completed Batch {}!", batch_counter);
 
@@ -409,53 +458,28 @@ public class dl4jGAN {
             }
         }
 
-        log.info("Computer vision deep learning model with pre-trained layers from the GAN's discriminator!");
-        ComputationGraph computerVision = new TransferLearning.GraphBuilder(sparkDis.getNetwork())
-                .fineTuneConfiguration(new FineTuneConfiguration.Builder()
-                        .trainingWorkspaceMode(WorkspaceMode.ENABLED)
-                        .inferenceWorkspaceMode(WorkspaceMode.ENABLED)
-                        .optimizationAlgo(OptimizationAlgorithm.STOCHASTIC_GRADIENT_DESCENT)
-                        .updater(new RmsProp(dis_learning_rate, 1e-8, 1e-8))
-                        .seed(numberOfTheBeast)
-                        .build())
-                .setFeatureExtractor("dis_dense_layer_6")
-                .removeVertexKeepConnections("dis_output_layer_7")
-                .addLayer("dis_output_layer_7", new OutputLayer.Builder(LossFunctions.LossFunction.MCXENT)
-                        .updater(new RmsProp(dis_learning_rate, 1e-8, 1e-8))
-                        .nIn(1024)
-                        .nOut(numClasses)
-                        .weightInit(WeightInit.XAVIER)
-                        .activation(Activation.SOFTMAX)
-                        .build(), "dis_dense_layer_6")
-                .build();
-
-        SparkComputationGraph sparkCV = new SparkComputationGraph(sc, computerVision, tm);
-
-        iterTrain.reset();
-        trainDataList.clear();
-        while (iterTrain.hasNext()) {
-            trainDataList.add(iterTrain.next());
-        }
-
-        JavaRDD<DataSet> trainData;
-        trainData = sc.parallelize(trainDataList);
-
-        for (int epoch = 0; epoch < numEpochs; epoch++) {
-            sparkCV.fit(trainData);
-            log.info("Completed Epoch {}!", epoch + 1);
-        }
+        log.info("Saving models!");
+        ModelSerializer.writeModel(sparkDis.getNetwork(), new File(resPath + "mnist_dis_model.zip"), true);
+        ModelSerializer.writeModel(sparkGan.getNetwork(), new File(resPath + "mnist_gan_model.zip"), true);
+        ModelSerializer.writeModel(gen, new File(resPath + "mnist_gen_model.zip"), true);
+        ModelSerializer.writeModel(sparkCV.getNetwork(), new File(resPath + "mnist_CV_model.zip"), true);
 
         RecordReader recordReaderTest = new CSVRecordReader(numLinesToSkip, delimiter);
         recordReaderTest.initialize(new FileSplit(new ClassPathResource("mnist_test.csv").getFile()));
 
         DataSetIterator iterTest = new RecordReaderDataSetIterator(recordReaderTest, batchSizePred, labelIndex, numClasses);
 
+        log.info("Making final test predictions!");
         Collection<INDArray> outFeat = new ArrayList<>();
+        batch_counter = 0;
         while (iterTest.hasNext()) {
             outFeat.add(sparkCV.getNetwork().output(iterTest.next().getFeatureMatrix())[0]);
+            batch_counter++;
+            System.out.println(batch_counter);
         }
         Nd4j.writeNumpy(Nd4j.vstack(outFeat), resPath + "mnist_test_predictions.csv", delimiter);
 
+        log.info("Hold my beer!");
         tm.deleteTempFiles(sc);
     }
 }
