@@ -14,6 +14,7 @@ import org.datavec.api.split.FileSplit;
 import org.datavec.api.util.ClassPathResource;
 
 import org.deeplearning4j.datasets.datavec.RecordReaderDataSetIterator;
+import org.deeplearning4j.datasets.iterator.ExistingDataSetIterator;
 import org.deeplearning4j.nn.api.*;
 import org.deeplearning4j.nn.conf.GradientNormalization;
 import org.deeplearning4j.nn.conf.WorkspaceMode;
@@ -24,6 +25,7 @@ import org.deeplearning4j.nn.conf.preprocessor.FeedForwardToCnnPreProcessor;
 import org.deeplearning4j.nn.graph.ComputationGraph;
 import org.deeplearning4j.nn.transferlearning.*;
 import org.deeplearning4j.nn.weights.*;
+import org.deeplearning4j.parallelism.ParallelWrapper;
 import org.deeplearning4j.spark.api.TrainingMaster;
 import org.deeplearning4j.spark.impl.graph.SparkComputationGraph;
 import org.deeplearning4j.spark.impl.paramavg.ParameterAveragingTrainingMaster;
@@ -45,8 +47,8 @@ import org.slf4j.LoggerFactory;
 public class dl4jGAN {
     private static final Logger log = LoggerFactory.getLogger(dl4jGAN.class);
 
-    private static final int batchSizePerWorker = 250;
-    private static final int batchSizePred = 2000;
+    private static final int batchSizePerWorker = 200;
+    private static final int batchSizePred = 1000;
     private static final int imageHeight = 28;
     private static final int imageWidth = 28;
     private static final int imageChannels = 1;
@@ -54,11 +56,11 @@ public class dl4jGAN {
     private static final int numClasses = 10;
     private static final int numClassesDis = 1;
     private static final int numFeatures = 784;
-    private static final int numIterations = 1;
+    private static final int numIterations = 10000;
     private static final int numGenSamples = 10; // This will be a grid so effectively we get {numGenSamples * numGenSamples} samples.
     private static final int numLinesToSkip = 0;
     private static final int numberOfTheBeast = 666;
-    private static final int printEvery = 1;
+    private static final int printEvery = 100;
     private static final int zSize = 2;
 
     private static final double dis_learning_rate = 0.025;
@@ -306,11 +308,25 @@ public class dl4jGAN {
                 .batchSizePerWorker(batchSizePerWorker)
                 .build();
 
-        SparkComputationGraph sparkDis = new SparkComputationGraph(sc, dis, tm);
-        SparkComputationGraph sparkGan = new SparkComputationGraph(sc, gan, tm);
+        ParallelWrapper wrapperDis = new ParallelWrapper.Builder(dis)
+                .prefetchBuffer(batchSizePerWorker)
+                .workers(2)
+                .averagingFrequency(10)
+                .reportScoreAfterAveraging(false)
+                .build();
+
+        ParallelWrapper wrapperGan = new ParallelWrapper.Builder(gan)
+                .prefetchBuffer(batchSizePerWorker)
+                .workers(2)
+                .averagingFrequency(10)
+                .reportScoreAfterAveraging(false)
+                .build();
+
+//        SparkComputationGraph sparkDis = new SparkComputationGraph(sc, dis, tm);
+//        SparkComputationGraph sparkGan = new SparkComputationGraph(sc, gan, tm);
 
         log.info("Computer vision deep learning model with pre-trained layers from the GAN's discriminator!");
-        ComputationGraph computerVision = new TransferLearning.GraphBuilder(sparkDis.getNetwork())
+        ComputationGraph computerVision = new TransferLearning.GraphBuilder(dis)
                 .fineTuneConfiguration(new FineTuneConfiguration.Builder()
                         .trainingWorkspaceMode(WorkspaceMode.ENABLED)
                         .inferenceWorkspaceMode(WorkspaceMode.ENABLED)
@@ -331,7 +347,14 @@ public class dl4jGAN {
         System.out.println(computerVision.summary());
         System.out.println(Arrays.toString(computerVision.output(Nd4j.randn(numGenSamples, numFeatures))[0].shape()));
 
-        SparkComputationGraph sparkCV = new SparkComputationGraph(sc, computerVision, tm);
+//        SparkComputationGraph sparkCV = new SparkComputationGraph(sc, computerVision, tm);
+
+        ParallelWrapper wrapperCV = new ParallelWrapper.Builder(computerVision)
+                .prefetchBuffer(batchSizePerWorker)
+                .workers(2)
+                .averagingFrequency(10)
+                .reportScoreAfterAveraging(false)
+                .build();
 
         RecordReader recordReaderTrain = new CSVRecordReader(numLinesToSkip, delimiter);
         recordReaderTrain.initialize(new FileSplit(new ClassPathResource("mnist_train.csv").getFile()));
@@ -339,7 +362,7 @@ public class dl4jGAN {
         DataSetIterator iterTrain = new RecordReaderDataSetIterator(recordReaderTrain, batchSizePerWorker, labelIndex, numClasses);
         List<DataSet> trainDataList = new ArrayList<>();
 
-        JavaRDD<DataSet> trainDataDis, trainDataGen, trainData;
+//        JavaRDD<DataSet> trainDataDis, trainDataGen, trainData;
 
         INDArray grid = Nd4j.linspace(-1.0, 1.0, numGenSamples);
         Collection<INDArray> z = new ArrayList<>();
@@ -370,26 +393,29 @@ public class dl4jGAN {
 
             // Unfrozen discriminator is trying to figure itself out given a frozen generator.
             log.info("Training discriminator!");
-            trainDataDis = sc.parallelize(trainDataList).persist(StorageLevel.DISK_ONLY());
-            sparkDis.fit(trainDataDis);
+            DataSetIterator trainDataDis = new ExistingDataSetIterator(trainDataList, batchSizePerWorker, labelIndex, numClassesDis);
+            wrapperDis.fit(trainDataDis);
+//            trainDataDis = sc.parallelize(trainDataList).persist(StorageLevel.DISK_ONLY());
+//            sparkDis.fit(trainDataDis);
+
 
             // Update GAN's frozen discriminator with unfrozen discriminator.
-            sparkGan.getNetwork().getLayer("gan_dis_batch_layer_9").setParam("gamma", sparkDis.getNetwork().getLayer("dis_batch_layer_1").getParam("gamma"));
-            sparkGan.getNetwork().getLayer("gan_dis_batch_layer_9").setParam("beta", sparkDis.getNetwork().getLayer("dis_batch_layer_1").getParam("beta"));
-            sparkGan.getNetwork().getLayer("gan_dis_batch_layer_9").setParam("mean", sparkDis.getNetwork().getLayer("dis_batch_layer_1").getParam("mean"));
-            sparkGan.getNetwork().getLayer("gan_dis_batch_layer_9").setParam("var", sparkDis.getNetwork().getLayer("dis_batch_layer_1").getParam("var"));
+            gan.getLayer("gan_dis_batch_layer_9").setParam("gamma", dis.getLayer("dis_batch_layer_1").getParam("gamma"));
+            gan.getLayer("gan_dis_batch_layer_9").setParam("beta", dis.getLayer("dis_batch_layer_1").getParam("beta"));
+            gan.getLayer("gan_dis_batch_layer_9").setParam("mean", dis.getLayer("dis_batch_layer_1").getParam("mean"));
+            gan.getLayer("gan_dis_batch_layer_9").setParam("var", dis.getLayer("dis_batch_layer_1").getParam("var"));
 
-            sparkGan.getNetwork().getLayer("gan_dis_conv2d_layer_10").setParam("W", sparkDis.getNetwork().getLayer("dis_conv2d_layer_2").getParam("W"));
-            sparkGan.getNetwork().getLayer("gan_dis_conv2d_layer_10").setParam("b", sparkDis.getNetwork().getLayer("dis_conv2d_layer_2").getParam("b"));
+            gan.getLayer("gan_dis_conv2d_layer_10").setParam("W", dis.getLayer("dis_conv2d_layer_2").getParam("W"));
+            gan.getLayer("gan_dis_conv2d_layer_10").setParam("b", dis.getLayer("dis_conv2d_layer_2").getParam("b"));
 
-            sparkGan.getNetwork().getLayer("gan_dis_conv2d_layer_12").setParam("W", sparkDis.getNetwork().getLayer("dis_conv2d_layer_4").getParam("W"));
-            sparkGan.getNetwork().getLayer("gan_dis_conv2d_layer_12").setParam("b", sparkDis.getNetwork().getLayer("dis_conv2d_layer_4").getParam("b"));
+            gan.getLayer("gan_dis_conv2d_layer_12").setParam("W", dis.getLayer("dis_conv2d_layer_4").getParam("W"));
+            gan.getLayer("gan_dis_conv2d_layer_12").setParam("b", dis.getLayer("dis_conv2d_layer_4").getParam("b"));
 
-            sparkGan.getNetwork().getLayer("gan_dis_dense_layer_14").setParam("W", sparkDis.getNetwork().getLayer("dis_dense_layer_6").getParam("W"));
-            sparkGan.getNetwork().getLayer("gan_dis_dense_layer_14").setParam("b", sparkDis.getNetwork().getLayer("dis_dense_layer_6").getParam("b"));
+            gan.getLayer("gan_dis_dense_layer_14").setParam("W", dis.getLayer("dis_dense_layer_6").getParam("W"));
+            gan.getLayer("gan_dis_dense_layer_14").setParam("b", dis.getLayer("dis_dense_layer_6").getParam("b"));
 
-            sparkGan.getNetwork().getLayer("gan_dis_output_layer_15").setParam("W", sparkDis.getNetwork().getLayer("dis_output_layer_7").getParam("W"));
-            sparkGan.getNetwork().getLayer("gan_dis_output_layer_15").setParam("b", sparkDis.getNetwork().getLayer("dis_output_layer_7").getParam("b"));
+            gan.getLayer("gan_dis_output_layer_15").setParam("W", dis.getLayer("dis_output_layer_7").getParam("W"));
+            gan.getLayer("gan_dis_output_layer_15").setParam("b", dis.getLayer("dis_output_layer_7").getParam("b"));
 
             trainDataList.clear();
             // Tell the frozen discriminator that all the fake examples are real examples.
@@ -398,52 +424,56 @@ public class dl4jGAN {
 
             // Unfrozen generator is trying to fool the frozen discriminator.
             log.info("Training generator!");
-            trainDataGen = sc.parallelize(trainDataList).persist(StorageLevel.DISK_ONLY());
-            sparkGan.fit(trainDataGen);
+            DataSetIterator trainDataGen = new ExistingDataSetIterator(trainDataList, batchSizePerWorker, labelIndex, numClassesDis);
+            wrapperGan.fit(trainDataGen);
+//            trainDataGen = sc.parallelize(trainDataList).persist(StorageLevel.DISK_ONLY());
+//            sparkGan.fit(trainDataGen);
 
             // Update frozen generator with GAN's unfrozen generator.
-            gen.getLayer("gen_batch_1").setParam("gamma", sparkGan.getNetwork().getLayer("gan_batch_1").getParam("gamma"));
-            gen.getLayer("gen_batch_1").setParam("beta", sparkGan.getNetwork().getLayer("gan_batch_1").getParam("beta"));
-            gen.getLayer("gen_batch_1").setParam("mean", sparkGan.getNetwork().getLayer("gan_batch_1").getParam("mean"));
-            gen.getLayer("gen_batch_1").setParam("var", sparkGan.getNetwork().getLayer("gan_batch_1").getParam("var"));
+            gen.getLayer("gen_batch_1").setParam("gamma", gan.getLayer("gan_batch_1").getParam("gamma"));
+            gen.getLayer("gen_batch_1").setParam("beta", gan.getLayer("gan_batch_1").getParam("beta"));
+            gen.getLayer("gen_batch_1").setParam("mean", gan.getLayer("gan_batch_1").getParam("mean"));
+            gen.getLayer("gen_batch_1").setParam("var", gan.getLayer("gan_batch_1").getParam("var"));
 
-            gen.getLayer("gen_dense_layer_2").setParam("W", sparkGan.getNetwork().getLayer("gan_dense_layer_2").getParam("W"));
-            gen.getLayer("gen_dense_layer_2").setParam("b", sparkGan.getNetwork().getLayer("gan_dense_layer_2").getParam("b"));
+            gen.getLayer("gen_dense_layer_2").setParam("W", gan.getLayer("gan_dense_layer_2").getParam("W"));
+            gen.getLayer("gen_dense_layer_2").setParam("b", gan.getLayer("gan_dense_layer_2").getParam("b"));
 
-            gen.getLayer("gen_dense_layer_3").setParam("W", sparkGan.getNetwork().getLayer("gan_dense_layer_3").getParam("W"));
-            gen.getLayer("gen_dense_layer_3").setParam("b", sparkGan.getNetwork().getLayer("gan_dense_layer_3").getParam("b"));
+            gen.getLayer("gen_dense_layer_3").setParam("W", gan.getLayer("gan_dense_layer_3").getParam("W"));
+            gen.getLayer("gen_dense_layer_3").setParam("b", gan.getLayer("gan_dense_layer_3").getParam("b"));
 
-            gen.getLayer("gen_batch_4").setParam("gamma", sparkGan.getNetwork().getLayer("gan_batch_4").getParam("gamma"));
-            gen.getLayer("gen_batch_4").setParam("beta", sparkGan.getNetwork().getLayer("gan_batch_4").getParam("beta"));
-            gen.getLayer("gen_batch_4").setParam("mean", sparkGan.getNetwork().getLayer("gan_batch_4").getParam("mean"));
-            gen.getLayer("gen_batch_4").setParam("var", sparkGan.getNetwork().getLayer("gan_batch_4").getParam("var"));
+            gen.getLayer("gen_batch_4").setParam("gamma", gan.getLayer("gan_batch_4").getParam("gamma"));
+            gen.getLayer("gen_batch_4").setParam("beta", gan.getLayer("gan_batch_4").getParam("beta"));
+            gen.getLayer("gen_batch_4").setParam("mean", gan.getLayer("gan_batch_4").getParam("mean"));
+            gen.getLayer("gen_batch_4").setParam("var", gan.getLayer("gan_batch_4").getParam("var"));
 
-            gen.getLayer("gen_conv2d_6").setParam("W", sparkGan.getNetwork().getLayer("gan_conv2d_6").getParam("W"));
-            gen.getLayer("gen_conv2d_6").setParam("b", sparkGan.getNetwork().getLayer("gan_conv2d_6").getParam("b"));
+            gen.getLayer("gen_conv2d_6").setParam("W", gan.getLayer("gan_conv2d_6").getParam("W"));
+            gen.getLayer("gen_conv2d_6").setParam("b", gan.getLayer("gan_conv2d_6").getParam("b"));
 
-            gen.getLayer("gen_conv2d_8").setParam("W", sparkGan.getNetwork().getLayer("gan_conv2d_8").getParam("W"));
-            gen.getLayer("gen_conv2d_8").setParam("b", sparkGan.getNetwork().getLayer("gan_conv2d_8").getParam("b"));
+            gen.getLayer("gen_conv2d_8").setParam("W", gan.getLayer("gan_conv2d_8").getParam("W"));
+            gen.getLayer("gen_conv2d_8").setParam("b", gan.getLayer("gan_conv2d_8").getParam("b"));
 
             trainDataList.clear();
             trainDataList.add(trDataSet);
 
             log.info("Training computer vision model!");
-            sparkCV.getNetwork().getLayer("dis_batch_layer_1").setParam("gamma", sparkDis.getNetwork().getLayer("dis_batch_layer_1").getParam("gamma"));
-            sparkCV.getNetwork().getLayer("dis_batch_layer_1").setParam("beta", sparkDis.getNetwork().getLayer("dis_batch_layer_1").getParam("beta"));
-            sparkCV.getNetwork().getLayer("dis_batch_layer_1").setParam("mean", sparkDis.getNetwork().getLayer("dis_batch_layer_1").getParam("mean"));
-            sparkCV.getNetwork().getLayer("dis_batch_layer_1").setParam("var", sparkDis.getNetwork().getLayer("dis_batch_layer_1").getParam("var"));
+            computerVision.getLayer("dis_batch_layer_1").setParam("gamma", dis.getLayer("dis_batch_layer_1").getParam("gamma"));
+            computerVision.getLayer("dis_batch_layer_1").setParam("beta", dis.getLayer("dis_batch_layer_1").getParam("beta"));
+            computerVision.getLayer("dis_batch_layer_1").setParam("mean", dis.getLayer("dis_batch_layer_1").getParam("mean"));
+            computerVision.getLayer("dis_batch_layer_1").setParam("var", dis.getLayer("dis_batch_layer_1").getParam("var"));
 
-            sparkCV.getNetwork().getLayer("dis_conv2d_layer_2").setParam("W", sparkDis.getNetwork().getLayer("dis_conv2d_layer_2").getParam("W"));
-            sparkCV.getNetwork().getLayer("dis_conv2d_layer_2").setParam("b", sparkDis.getNetwork().getLayer("dis_conv2d_layer_2").getParam("b"));
+            computerVision.getLayer("dis_conv2d_layer_2").setParam("W", dis.getLayer("dis_conv2d_layer_2").getParam("W"));
+            computerVision.getLayer("dis_conv2d_layer_2").setParam("b", dis.getLayer("dis_conv2d_layer_2").getParam("b"));
 
-            sparkCV.getNetwork().getLayer("dis_conv2d_layer_4").setParam("W", sparkDis.getNetwork().getLayer("dis_conv2d_layer_4").getParam("W"));
-            sparkCV.getNetwork().getLayer("dis_conv2d_layer_4").setParam("b", sparkDis.getNetwork().getLayer("dis_conv2d_layer_4").getParam("b"));
+            computerVision.getLayer("dis_conv2d_layer_4").setParam("W", dis.getLayer("dis_conv2d_layer_4").getParam("W"));
+            computerVision.getLayer("dis_conv2d_layer_4").setParam("b", dis.getLayer("dis_conv2d_layer_4").getParam("b"));
 
-            sparkCV.getNetwork().getLayer("dis_dense_layer_6").setParam("W", sparkDis.getNetwork().getLayer("dis_dense_layer_6").getParam("W"));
-            sparkCV.getNetwork().getLayer("dis_dense_layer_6").setParam("b", sparkDis.getNetwork().getLayer("dis_dense_layer_6").getParam("b"));
+            computerVision.getLayer("dis_dense_layer_6").setParam("W", dis.getLayer("dis_dense_layer_6").getParam("W"));
+            computerVision.getLayer("dis_dense_layer_6").setParam("b", dis.getLayer("dis_dense_layer_6").getParam("b"));
 
-            trainData = sc.parallelize(trainDataList);
-            sparkCV.fit(trainData);
+            DataSetIterator trainDataCV = new ExistingDataSetIterator(trainDataList, batchSizePerWorker, labelIndex, numClassesDis);
+            wrapperCV.fit(trainDataCV);
+//            trainData = sc.parallelize(trainDataList);
+//            sparkCV.fit(trainData);
 
             batch_counter++;
             log.info("Completed Batch {}!", batch_counter);
@@ -452,7 +482,7 @@ public class dl4jGAN {
                 out = gen.output(Nd4j.vstack(z))[0].reshape(numGenSamples * numGenSamples, numFeatures);
                 Nd4j.writeNumpy(out, String.format("%sout_%d.csv", resPath, batch_counter), delimiter);
                 log.info("Ensemble of deep learners for estimation of uncertainty!");
-                ModelSerializer.writeModel(sparkCV.getNetwork(), new File(String.format("%smnist_CV_model_%d.zip", resPath, batch_counter)), false);
+                ModelSerializer.writeModel(computerVision, new File(String.format("%smnist_CV_model_%d.zip", resPath, batch_counter)), false);
             }
 
             if (!iterTrain.hasNext()) {
@@ -461,8 +491,8 @@ public class dl4jGAN {
         }
 
         log.info("Saving models!");
-        ModelSerializer.writeModel(sparkDis.getNetwork(), new File(resPath + "mnist_dis_model.zip"), true);
-        ModelSerializer.writeModel(sparkGan.getNetwork(), new File(resPath + "mnist_gan_model.zip"), true);
+        ModelSerializer.writeModel(dis, new File(resPath + "mnist_dis_model.zip"), true);
+        ModelSerializer.writeModel(gan, new File(resPath + "mnist_gan_model.zip"), true);
         ModelSerializer.writeModel(gen, new File(resPath + "mnist_gen_model.zip"), true);
 
         RecordReader recordReaderTest = new CSVRecordReader(numLinesToSkip, delimiter);
@@ -473,7 +503,7 @@ public class dl4jGAN {
         log.info("Making final test predictions!");
         Collection<INDArray> outFeat = new ArrayList<>();
         while (iterTest.hasNext()) {
-            outFeat.add(sparkCV.getNetwork().output(iterTest.next().getFeatureMatrix())[0]);
+            outFeat.add(computerVision.output(iterTest.next().getFeatureMatrix())[0]);
         }
         Nd4j.writeNumpy(Nd4j.vstack(outFeat), resPath + "mnist_test_predictions.csv", delimiter);
 
