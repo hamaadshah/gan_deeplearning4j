@@ -45,8 +45,8 @@ import org.slf4j.LoggerFactory;
 public class dl4jGAN {
     private static final Logger log = LoggerFactory.getLogger(dl4jGAN.class);
 
-    private static final int batchSizePerWorker = 100;
-    private static final int batchSizePred = 1000;
+    private static final int batchSizePerWorker = 250;
+    private static final int batchSizePred = 2000;
     private static final int imageHeight = 28;
     private static final int imageWidth = 28;
     private static final int imageChannels = 1;
@@ -54,11 +54,11 @@ public class dl4jGAN {
     private static final int numClasses = 10;
     private static final int numClassesDis = 1;
     private static final int numFeatures = 784;
-    private static final int numIterations = 10000;
+    private static final int numIterations = 1;
     private static final int numGenSamples = 10; // This will be a grid so effectively we get {numGenSamples * numGenSamples} samples.
     private static final int numLinesToSkip = 0;
     private static final int numberOfTheBeast = 666;
-    private static final int printEvery = 100;
+    private static final int printEvery = 1;
     private static final int zSize = 2;
 
     private static final double dis_learning_rate = 0.025;
@@ -451,6 +451,8 @@ public class dl4jGAN {
             if ((batch_counter % printEvery) == 0) {
                 out = gen.output(Nd4j.vstack(z))[0].reshape(numGenSamples * numGenSamples, numFeatures);
                 Nd4j.writeNumpy(out, String.format("%sout_%d.csv", resPath, batch_counter), delimiter);
+                log.info("Ensemble of deep learners for estimation of uncertainty!");
+                ModelSerializer.writeModel(sparkCV.getNetwork(), new File(String.format("%smnist_CV_model_%d.zip", resPath, batch_counter)), false);
             }
 
             if (!iterTrain.hasNext()) {
@@ -462,7 +464,6 @@ public class dl4jGAN {
         ModelSerializer.writeModel(sparkDis.getNetwork(), new File(resPath + "mnist_dis_model.zip"), true);
         ModelSerializer.writeModel(sparkGan.getNetwork(), new File(resPath + "mnist_gan_model.zip"), true);
         ModelSerializer.writeModel(gen, new File(resPath + "mnist_gen_model.zip"), true);
-        ModelSerializer.writeModel(sparkCV.getNetwork(), new File(resPath + "mnist_CV_model.zip"), true);
 
         RecordReader recordReaderTest = new CSVRecordReader(numLinesToSkip, delimiter);
         recordReaderTest.initialize(new FileSplit(new ClassPathResource("mnist_test.csv").getFile()));
