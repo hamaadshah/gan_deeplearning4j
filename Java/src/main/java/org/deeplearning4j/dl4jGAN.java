@@ -51,9 +51,9 @@ public class dl4jGAN {
     private static final int labelIndex = 784;
     private static final int numClasses = 10;
     private static final int numClassesDis = 1;
-    private static final int numEpochs = 5;
+    private static final int numEpochs = 50;
     private static final int numFeatures = 784;
-    private static final int numIterations = 10000 * 100;
+    private static final int numIterations = 10000;
     private static final int numGenSamples = 10; // This will be a grid so effectively we get {numGenSamples * numGenSamples} samples.
     private static final int numLinesToSkip = 0;
     private static final int numberOfTheBeast = 666;
@@ -67,7 +67,7 @@ public class dl4jGAN {
     private static final String delimiter = ",";
     private static final String resPath = "/Users/samson/Projects/gan_deeplearning4j/Java/src/main/resources/";
 
-    private static final boolean useGpu = false;
+    private static final boolean useGpu = true;
 
     public static void main(String[] args) throws Exception {
         new dl4jGAN().GAN(args);
@@ -84,7 +84,7 @@ public class dl4jGAN {
 
             CudaEnvironment.getInstance().getConfiguration()
                     .allowMultiGPU(true)
-                    .setMaximumDeviceCache(2L * 1024L * 1024L * 1024L)
+                    .setMaximumDeviceCache(8L * 1024L * 1024L * 1024L)
                     .allowCrossDeviceAccess(true)
                     .setVerbose(true);
         }
@@ -406,7 +406,6 @@ public class dl4jGAN {
 
             if (!iterTrain.hasNext()) {
                 iterTrain.reset();
-                batch_counter = 0;
             }
         }
 
