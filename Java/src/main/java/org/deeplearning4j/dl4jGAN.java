@@ -471,11 +471,8 @@ public class dl4jGAN {
 
         log.info("Making final test predictions!");
         Collection<INDArray> outFeat = new ArrayList<>();
-        batch_counter = 0;
         while (iterTest.hasNext()) {
             outFeat.add(sparkCV.getNetwork().output(iterTest.next().getFeatureMatrix())[0]);
-            batch_counter++;
-            System.out.println(batch_counter);
         }
         Nd4j.writeNumpy(Nd4j.vstack(outFeat), resPath + "mnist_test_predictions.csv", delimiter);
 
