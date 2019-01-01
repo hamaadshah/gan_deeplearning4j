@@ -2,44 +2,34 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
-         
     <modelVersion>4.0.0</modelVersion>
     <groupId>org.deeplearning4j</groupId>
     <artifactId>dl4jGAN</artifactId>
-    <version>1.0.0-beta</version>
+    <version>1.0.0-beta3</version>
     <properties>
         <!--nd4j-cuda-9.0-platform or nd4j-native-platform-->
         <nd4j.backend>nd4j-cuda-9.0-platform</nd4j.backend>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <shadedClassifier>bin</shadedClassifier>
-        <dl4j.version>1.0.0-beta</dl4j.version>
-        <nd4j.version>1.0.0-beta</nd4j.version>
+        <dl4j.version>1.0.0-beta3</dl4j.version>
+        <nd4j.version>1.0.0-beta3</nd4j.version>
+        <datavec.version>1.0.0-beta3</datavec.version>
+        <arbiter.version>1.0.0-beta3</arbiter.version>
+        <dl4j.spark.version>1.0.0-beta3_spark_1</dl4j.spark.version>
+        <datavec.spark.version>1.0.0-beta3_spark_1</datavec.spark.version>
         <logback.version>1.2.3</logback.version>
         <java.version>1.8</java.version>
         <maven-shade-plugin.version>2.4.3</maven-shade-plugin.version>
-        <jcommander.version>1.27</jcommander.version>
-        <azure.hadoop.version>2.7.4</azure.hadoop.version>
-        <azure.storage.version>2.0.0</azure.storage.version>
         <spark.version>1.6.3</spark.version>
         <java.version>1.8</java.version>
-        <datavec.version>1.0.0-beta</datavec.version>
-        <arbiter.version>1.0.0-beta</arbiter.version>
         <rl4j.version>1.0.0-beta</rl4j.version>
-        <dl4j.spark.version>1.0.0-beta_spark_1</dl4j.spark.version>
-        <datavec.spark.version>1.0.0-beta_spark_1</datavec.spark.version>
         <scala.binary.version>2.11</scala.binary.version>
         <hadoop.version>2.2.0</hadoop.version>
-        <guava.version>19.0</guava.version>
         <logback.version>1.1.7</logback.version>
-        <jfreechart.version>1.0.13</jfreechart.version>
-        <jcommon.version>1.0.23</jcommon.version>
         <maven-compiler-plugin.version>3.6.1</maven-compiler-plugin.version>
         <maven-shade-plugin.version>2.4.3</maven-shade-plugin.version>
         <exec-maven-plugin.version>1.4.0</exec-maven-plugin.version>
         <maven.minimum.version>3.3.1</maven.minimum.version>
-        <javafx.version>2.2.3</javafx.version>
-        <javafx.runtime.lib.jar>${env.JAVAFX_HOME}/jfxrt.jar</javafx.runtime.lib.jar>
-        <aws.sdk.version>1.11.109</aws.sdk.version>
         <jackson.version>2.5.1</jackson.version>
         <scala.plugin.version>3.2.2</scala.plugin.version>
     </properties>
@@ -126,11 +116,6 @@
             <groupId>org.deeplearning4j</groupId>
             <artifactId>dl4j-spark-parameterserver_${scala.binary.version}</artifactId>
             <version>${dl4j.spark.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>com.beust</groupId>
-            <artifactId>jcommander</artifactId>
-            <version>${jcommander.version}</version>
         </dependency>
         <dependency>
             <groupId>org.nd4j</groupId>
