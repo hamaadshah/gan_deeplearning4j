@@ -60,9 +60,9 @@ public class dl4jGANInsurance {
     private static final int tensorDimThreeSize = 1;
     private static final int zSize = 2;
 
-    private static final double dis_learning_rate = 0.002;
+    private static final double dis_learning_rate = 0.0002;
     private static final double frozen_learning_rate = 0.0;
-    private static final double gen_learning_rate = 0.004;
+    private static final double gen_learning_rate = 0.0004;
 
     private static final String delimiter = ",";
     private static final String resPath = "/Users/samson/Projects/gan_deeplearning4j/outputs/insurance/";
@@ -240,7 +240,7 @@ public class dl4jGANInsurance {
 
         log.info("Setting up Synchronous Parameter Averaging!");
         TrainingMaster tm = new ParameterAveragingTrainingMaster.Builder(batchSizePerWorker)
-                .averagingFrequency(10)
+                .averagingFrequency(5)
                 .rngSeed(numberOfTheBeast)
                 .workerPrefetchNumBatches(0)
                 .batchSizePerWorker(batchSizePerWorker)
