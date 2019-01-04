@@ -7,4 +7,6 @@ Python/data/*
 Python/outputs/*
 *.csv
 *.log
+outputs/*
+
 
