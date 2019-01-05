@@ -66,7 +66,7 @@ public class dl4jGANComputerVision {
     private static final int numGenSamples = 10; // This will be a grid so effectively we get {numGenSamples * numGenSamples} samples.
     private static final int numLinesToSkip = 0;
     private static final int numberOfTheBeast = 666;
-    private static final int printEvery = 10;
+    private static final int printEvery = 100;
     private static final int saveEvery = 100;
     private static final int tensorDimOneSize = 28;
     private static final int tensorDimTwoSize = 28;
