@@ -1,7 +1,7 @@
 /*
 License
 
-Copyright 2019 Hamaad Musharaf Shah
+Copyright 2020 Hamaad Musharaf Shah
 
 Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at
 
@@ -12,46 +12,47 @@ Unless required by applicable law or agreed to in writing, software distributed 
 
 package org.deeplearning4j;
 
-import java.io.*;
-import java.util.*;
-
 import org.apache.spark.SparkConf;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
-
 import org.datavec.api.records.reader.RecordReader;
 import org.datavec.api.records.reader.impl.csv.CSVRecordReader;
 import org.datavec.api.split.FileSplit;
 import org.datavec.api.util.ClassPathResource;
-
 import org.deeplearning4j.datasets.datavec.RecordReaderDataSetIterator;
-import org.deeplearning4j.nn.api.*;
+import org.deeplearning4j.nn.api.OptimizationAlgorithm;
 import org.deeplearning4j.nn.conf.GradientNormalization;
+import org.deeplearning4j.nn.conf.NeuralNetConfiguration;
 import org.deeplearning4j.nn.conf.WorkspaceMode;
 import org.deeplearning4j.nn.conf.inputs.InputType;
 import org.deeplearning4j.nn.conf.layers.*;
-import org.deeplearning4j.nn.conf.NeuralNetConfiguration;
 import org.deeplearning4j.nn.conf.preprocessor.FeedForwardToCnnPreProcessor;
 import org.deeplearning4j.nn.graph.ComputationGraph;
-import org.deeplearning4j.nn.transferlearning.*;
-import org.deeplearning4j.nn.weights.*;
+import org.deeplearning4j.nn.transferlearning.FineTuneConfiguration;
+import org.deeplearning4j.nn.transferlearning.TransferLearning;
+import org.deeplearning4j.nn.weights.WeightInit;
 import org.deeplearning4j.spark.api.TrainingMaster;
 import org.deeplearning4j.spark.impl.graph.SparkComputationGraph;
 import org.deeplearning4j.spark.impl.paramavg.ParameterAveragingTrainingMaster;
 import org.deeplearning4j.util.ModelSerializer;
-
 import org.nd4j.jita.conf.CudaEnvironment;
-import org.nd4j.linalg.activations.*;
+import org.nd4j.linalg.activations.Activation;
 import org.nd4j.linalg.api.buffer.DataBuffer;
 import org.nd4j.linalg.api.ndarray.INDArray;
 import org.nd4j.linalg.dataset.DataSet;
 import org.nd4j.linalg.dataset.api.iterator.DataSetIterator;
 import org.nd4j.linalg.factory.Nd4j;
-import org.nd4j.linalg.learning.config.*;
-import org.nd4j.linalg.lossfunctions.*;
-
+import org.nd4j.linalg.learning.config.RmsProp;
+import org.nd4j.linalg.lossfunctions.LossFunctions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.io.File;
+import java.io.FileWriter;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.List;
 
 public class dl4jGANComputerVision {
     private static final Logger log = LoggerFactory.getLogger(dl4jGANComputerVision.class);
@@ -62,12 +63,12 @@ public class dl4jGANComputerVision {
     private static final int numClasses = 10; // Using Softmax.
     private static final int numClassesDis = 1; // Using Sigmoid.
     private static final int numFeatures = 784;
-    private static final int numIterations = 10000;
+    private static final int numIterations = 2;
     private static final int numGenSamples = 10; // This will be a grid so effectively we get {numGenSamples * numGenSamples} samples.
     private static final int numLinesToSkip = 0;
     private static final int numberOfTheBeast = 666;
-    private static final int printEvery = 100;
-    private static final int saveEvery = 100;
+    private static final int printEvery = 1;
+    private static final int saveEvery = 1;
     private static final int tensorDimOneSize = 28;
     private static final int tensorDimTwoSize = 28;
     private static final int tensorDimThreeSize = 1;
@@ -78,7 +79,7 @@ public class dl4jGANComputerVision {
     private static final double gen_learning_rate = 0.004;
 
     private static final String delimiter = ",";
-    private static final String resPath = "/Users/samson/Projects/gan_deeplearning4j/outputs/computer_vision/";
+    private static final String resPath = "/home/hamaad/Projects/gan_deeplearning4j/outputs/computer_vision/";
     private static final String newLine = "\n";
     private static final String dataSetName = "mnist";
 
